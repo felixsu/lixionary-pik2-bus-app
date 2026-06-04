@@ -15,7 +15,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Clear
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -81,6 +80,7 @@ class MainActivity : ComponentActivity() {
             )
         }
 
+        setContent {
             val isLocationPermissionGranted by isLocationPermissionGrantedState
             val backendUrl = "https://tj-api.lixionary.com/"
             var apiKey by remember { mutableStateOf("") }

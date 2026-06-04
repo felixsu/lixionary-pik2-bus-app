@@ -82,6 +82,7 @@ fun MapScreen(
     val routePolylines = remember { mutableListOf<com.mapbox.mapboxsdk.annotations.Polyline>() }
     val stopMarkers = remember { mutableListOf<com.mapbox.mapboxsdk.annotations.Marker>() }
     val busMarkersMap = remember { mutableMapOf<String, com.mapbox.mapboxsdk.annotations.Marker>() }
+    val busIconCache = remember { mutableMapOf<Pair<Int, Int?>, com.mapbox.mapboxsdk.annotations.Icon>() }
 
     val coroutineScope = rememberCoroutineScope()
     val dataStoreManager = remember { DataStoreManager(context) }
@@ -231,6 +232,13 @@ fun MapScreen(
             .minByOrNull { it.eta_seconds!! }
     }
 
+    // Clear bus markers only when the route or map state changes (tab switch)
+    LaunchedEffect(route, mapboxMapState) {
+        val map = mapboxMapState ?: return@LaunchedEffect
+        busMarkersMap.values.forEach { map.removeMarker(it) }
+        busMarkersMap.clear()
+    }
+
     // Draw route polylines and stops only when route, stops or map change (removes blinking)
     LaunchedEffect(route, stops, mapboxMapState) {
         val map = mapboxMapState ?: return@LaunchedEffect
@@ -241,10 +249,6 @@ fun MapScreen(
         
         stopMarkers.forEach { map.removeMarker(it) }
         stopMarkers.clear()
-        
-        // Remove existing bus markers from previous route
-        busMarkersMap.values.forEach { map.removeMarker(it) }
-        busMarkersMap.clear()
         
         // Draw route polylines in solid single color (Indigo #3F51B5)
         stops.forEach { stop ->
@@ -347,8 +351,13 @@ fun MapScreen(
                     val routeColorStr = route?.color ?: "#FFEC792D"
                     val busColorInt = getDirectionColor(routeColorStr, isReturnTrip)
 
-                    // Create dynamic bus icon with direction color and bearing (triangle symbol without dot)
-                    val busIcon = createBusIcon(context, busColorInt, bus.bearing)
+                    // Get or create cached bus icon with rounded bearing (to nearest 10 degrees)
+                    val roundedBearing = bus.bearing?.let { ((it + 5) / 10 * 10) % 360 }
+                    val cacheKey = Pair(busColorInt, roundedBearing)
+                    val busIcon = busIconCache.getOrPut(cacheKey) {
+                        createBusIcon(context, busColorInt, roundedBearing)
+                    }
+
                     val directionLabel = if (isReturnTrip) " (Return)" else " (Outbound)"
                     val title = "Bus ${bus.plate_number}$directionLabel"
                     val snippet = "Speed: ${bus.speed_kmh.toInt()} km/h | Operator: ${bus.operator}"
@@ -356,12 +365,33 @@ fun MapScreen(
 
                     val existingMarker = busMarkersMap[bus.plate_number]
                     if (existingMarker != null) {
-                        // Update existing marker properties in place to prevent losing info callout windows
+                        // Update position and metadata in place
                         existingMarker.position = position
                         existingMarker.title = title
                         existingMarker.snippet = snippet
-                        existingMarker.icon = busIcon
-                        map.updateMarker(existingMarker)
+                        
+                        if (bus.plate_number == selectedPlateNumber) {
+                            // If selected, update in-place without changing icon or recreating 
+                            // to ensure the info window callout remains open and doesn't flicker.
+                            map.updateMarker(existingMarker)
+                        } else {
+                            // If not selected, check if icon/rotation has changed.
+                            // Since Mapbox legacy updateMarker doesn't update the icon image on screen,
+                            // we remove and recreate the marker to reflect the new direction.
+                            if (existingMarker.icon != busIcon) {
+                                map.removeMarker(existingMarker)
+                                val newMarker = map.addMarker(
+                                    MarkerOptions()
+                                        .position(position)
+                                        .title(title)
+                                        .snippet(snippet)
+                                        .icon(busIcon)
+                                )
+                                busMarkersMap[bus.plate_number] = newMarker
+                            } else {
+                                map.updateMarker(existingMarker)
+                            }
+                        }
                     } else {
                         // Create and add new marker
                         val marker = map.addMarker(
