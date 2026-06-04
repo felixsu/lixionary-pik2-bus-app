@@ -66,6 +66,9 @@ data class BusPosition(
 )
 
 interface BusTrackerService {
+    @GET("health")
+    suspend fun checkHealth(): Map<String, String>
+
     @GET("routes")
     suspend fun getRoutes(): List<Route>
 

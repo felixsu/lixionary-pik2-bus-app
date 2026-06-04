@@ -66,7 +66,7 @@ class MainActivity : ComponentActivity() {
 
             // Fetch available routes and stops based on selected config
             LaunchedEffect(backendUrl, isEditingBuses) {
-                if (backendUrl.isNotEmpty()) {
+                if (backendUrl.isNotEmpty() && !isEditingBuses) {
                     isLoading = true
                     try {
                         val client = BusTrackerClient(backendUrl)
@@ -126,8 +126,6 @@ class MainActivity : ComponentActivity() {
                             SettingsScreen(
                                 currentUrl = backendUrl,
                                 selectedBuses = selectedBuses,
-                                availableRoutes = availableRoutes,
-                                isLoading = isLoading,
                                 onSave = { newUrl, newBuses ->
                                     lifecycleScope.launch {
                                         dataStoreManager.saveBackendUrl(newUrl)
@@ -176,13 +174,46 @@ class MainActivity : ComponentActivity() {
 fun SettingsScreen(
     currentUrl: String,
     selectedBuses: List<String>,
-    availableRoutes: List<Route>,
-    isLoading: Boolean,
     onSave: (String, List<String>) -> Unit,
     onCancel: () -> Unit
 ) {
     var urlInput by remember { mutableStateOf(currentUrl) }
+    var isCheckingHealth by remember { mutableStateOf(false) }
+    var isBackendHealthy by remember { mutableStateOf(false) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    val fetchedRoutes = remember { mutableStateListOf<Route>() }
     val chosenBuses = remember { mutableStateListOf<String>().apply { addAll(selectedBuses) } }
+    val scope = rememberCoroutineScope()
+
+    // Automatically check health of the current saved URL on load
+    LaunchedEffect(Unit) {
+        if (currentUrl.isNotEmpty()) {
+            isCheckingHealth = true
+            try {
+                val client = BusTrackerClient(currentUrl)
+                val healthRes = client.service.checkHealth()
+                if (healthRes["status"] == "ok") {
+                    val routes = client.service.getRoutes()
+                    fetchedRoutes.clear()
+                    fetchedRoutes.addAll(routes)
+                    isBackendHealthy = true
+                }
+            } catch (e: Exception) {
+                errorMessage = "Saved backend unreachable: ${e.localizedMessage ?: e.message}"
+            } finally {
+                isCheckingHealth = false
+            }
+        }
+    }
+
+    // Reset health state when URL input changes
+    LaunchedEffect(urlInput) {
+        if (urlInput != currentUrl) {
+            isBackendHealthy = false
+            fetchedRoutes.clear()
+            errorMessage = null
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -206,37 +237,93 @@ fun SettingsScreen(
                 fontWeight = FontWeight.Bold
             )
             Spacer(modifier = Modifier.height(8.dp))
-            OutlinedTextField(
-                value = urlInput,
-                onValueChange = { urlInput = it },
+            Row(
                 modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("http://192.168.1.100:8000/") },
-                singleLine = true
-            )
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                OutlinedTextField(
+                    value = urlInput,
+                    onValueChange = { urlInput = it },
+                    modifier = Modifier.weight(1f),
+                    placeholder = { Text("http://192.168.1.100:8000/") },
+                    singleLine = true
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Button(
+                    onClick = {
+                        scope.launch {
+                            isCheckingHealth = true
+                            errorMessage = null
+                            isBackendHealthy = false
+                            try {
+                                val client = BusTrackerClient(urlInput)
+                                val healthRes = client.service.checkHealth()
+                                if (healthRes["status"] == "ok") {
+                                    val routes = client.service.getRoutes()
+                                    fetchedRoutes.clear()
+                                    fetchedRoutes.addAll(routes)
+                                    isBackendHealthy = true
+                                } else {
+                                    errorMessage = "Backend healthcheck failed: status is not ok"
+                                }
+                            } catch (e: Exception) {
+                                errorMessage = "Failed to connect: ${e.localizedMessage ?: e.message}"
+                            } finally {
+                                isCheckingHealth = false
+                            }
+                        }
+                    },
+                    enabled = urlInput.isNotEmpty() && !isCheckingHealth
+                ) {
+                    if (isCheckingHealth) {
+                        CircularProgressIndicator(
+                            modifier = Modifier.size(18.dp),
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            strokeWidth = 2.dp
+                        )
+                    } else {
+                        Text("Connect")
+                    }
+                }
+            }
+            
+            errorMessage?.let { error ->
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    text = error,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall
+                )
+            }
             
             Spacer(modifier = Modifier.height(24.dp))
             
             Text(
                 text = "Select Buses to Track (Max 3)",
                 style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
+                fontWeight = FontWeight.Bold,
+                color = if (isBackendHealthy) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
             )
             Spacer(modifier = Modifier.height(8.dp))
             
-            if (isLoading) {
+            if (!isBackendHealthy) {
                 Box(
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth(),
                     contentAlignment = Alignment.Center
                 ) {
-                    CircularProgressIndicator(color = MaterialTheme.colorScheme.primary)
+                    Text(
+                        text = "Verify your backend URL to view available routes",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
             } else {
                 LazyColumn(
                     modifier = Modifier.weight(1f)
                 ) {
-                    items(availableRoutes) { route ->
+                    items(fetchedRoutes) { route ->
                         val isChecked = chosenBuses.contains(route.slug)
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
@@ -248,8 +335,6 @@ fun SettingsScreen(
                                     } else {
                                         if (chosenBuses.size < 3) {
                                             chosenBuses.add(route.slug)
-                                        } else {
-                                            // enforce max 3
                                         }
                                     }
                                 }
@@ -295,7 +380,7 @@ fun SettingsScreen(
                 Spacer(modifier = Modifier.width(16.dp))
                 Button(
                     onClick = { onSave(urlInput, chosenBuses.toList()) },
-                    enabled = chosenBuses.isNotEmpty()
+                    enabled = isBackendHealthy && chosenBuses.isNotEmpty()
                 ) {
                     Text("Save Config")
                 }

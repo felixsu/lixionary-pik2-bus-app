@@ -196,6 +196,11 @@ async def sync_catalogs():
     except Exception as e:
         logger.error(f"Error syncing TransJakarta T31: {e}")
 
+@app.get("/health")
+def health():
+    """Simple healthcheck endpoint."""
+    return {"status": "ok"}
+
 @app.get("/routes")
 def get_routes():
     """Retrieve all available routes."""
