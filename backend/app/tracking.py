@@ -11,12 +11,13 @@ from app.schemas import BusPosition, normalize_tj_bus, normalize_sedayu_position
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Key transit coordinates for T31 polling
+# Key transit coordinates for TransJakarta polling (covers T31 and 1A corridors)
 T31_HUBS = [
     {"lat": -6.243525, "lng": 106.801878, "name": "Blok M"},
     {"lat": -6.202101, "lng": 106.799893, "name": "Petamburan"},
     {"lat": -6.107998, "lng": 106.739420, "name": "Tzu Chi PIK"},
-    {"lat": -6.039902, "lng": 106.696259, "name": "Shelter PIK 2"}
+    {"lat": -6.039902, "lng": 106.696259, "name": "Shelter PIK 2"},
+    {"lat": -6.175000, "lng": 106.820000, "name": "Monas / Central Jakarta"}
 ]
 
 class TrackingManager:

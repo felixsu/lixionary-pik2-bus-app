@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
@@ -362,10 +363,37 @@ fun SettingsScreen(
                     )
                 }
             } else {
+                var searchQuery by remember { mutableStateOf("") }
+                val filteredRoutes = remember(searchQuery, fetchedRoutes.toList()) {
+                    fetchedRoutes.filter { route ->
+                        route.code.contains(searchQuery, ignoreCase = true) ||
+                        route.name.contains(searchQuery, ignoreCase = true) ||
+                        route.operator.contains(searchQuery, ignoreCase = true)
+                    }
+                }
+
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                    placeholder = { Text("Search bus (e.g. ASG2, T31)") },
+                    singleLine = true,
+                    trailingIcon = {
+                        if (searchQuery.isNotEmpty()) {
+                            IconButton(onClick = { searchQuery = "" }) {
+                                Icon(
+                                    imageVector = Icons.Default.Clear,
+                                    contentDescription = "Clear search"
+                                )
+                            }
+                        }
+                    }
+                )
+
                 LazyColumn(
                     modifier = Modifier.weight(1f)
                 ) {
-                    items(fetchedRoutes) { route ->
+                    items(filteredRoutes) { route ->
                         val isChecked = chosenBuses.contains(route.slug)
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
