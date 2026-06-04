@@ -215,7 +215,7 @@ private fun getDirectionColor(baseColorStr: String, isReturn: Boolean): Int {
 }
 
 private fun createStopIcon(context: android.content.Context): com.mapbox.mapboxsdk.annotations.Icon {
-    val size = 28
+    val size = 84
     val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bitmap)
     val paint = Paint().apply {
@@ -228,7 +228,7 @@ private fun createStopIcon(context: android.content.Context): com.mapbox.mapboxs
 
     // Inner blue circle representing bus stop
     paint.color = Color.parseColor("#1976D2") // Accent blue
-    canvas.drawCircle(size / 2f, size / 2f, size / 2f - 3f, paint)
+    canvas.drawCircle(size / 2f, size / 2f, size / 2f - 9f, paint)
 
     // Center white dot
     paint.color = Color.WHITE
@@ -238,7 +238,7 @@ private fun createStopIcon(context: android.content.Context): com.mapbox.mapboxs
 }
 
 private fun createBusIcon(context: android.content.Context, colorInt: Int, bearing: Int?): com.mapbox.mapboxsdk.annotations.Icon {
-    val size = 48
+    val size = 144
     val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bitmap)
     val paint = Paint().apply {
@@ -251,7 +251,7 @@ private fun createBusIcon(context: android.content.Context, colorInt: Int, beari
 
     // Draw main circle with bus color
     paint.color = colorInt
-    canvas.drawCircle(size / 2f, size / 2f, size / 3.2f - 3f, paint)
+    canvas.drawCircle(size / 2f, size / 2f, size / 3.2f - 9f, paint)
 
     // Draw inner bus indicator (e.g. small white dot or symbol)
     paint.color = Color.WHITE
@@ -269,18 +269,18 @@ private fun createBusIcon(context: android.content.Context, colorInt: Int, beari
         val angleRad = Math.toRadians((bearing - 90).toDouble())
         
         // Tip of the arrow (outside the circle)
-        val tipX = cx + (radius + 6f) * Math.cos(angleRad).toFloat()
-        val tipY = cy + (radius + 6f) * Math.sin(angleRad).toFloat()
+        val tipX = cx + (radius + 18f) * Math.cos(angleRad).toFloat()
+        val tipY = cy + (radius + 18f) * Math.sin(angleRad).toFloat()
         
         // Base corners of the arrow triangle
         val baseLeftAngle = angleRad + Math.toRadians(140.0)
         val baseRightAngle = angleRad - Math.toRadians(140.0)
         
-        val leftX = cx + (radius - 2f) * Math.cos(baseLeftAngle).toFloat()
-        val leftY = cy + (radius - 2f) * Math.sin(baseLeftAngle).toFloat()
+        val leftX = cx + (radius - 6f) * Math.cos(baseLeftAngle).toFloat()
+        val leftY = cy + (radius - 6f) * Math.sin(baseLeftAngle).toFloat()
         
-        val rightX = cx + (radius - 2f) * Math.cos(baseRightAngle).toFloat()
-        val rightY = cy + (radius - 2f) * Math.sin(baseRightAngle).toFloat()
+        val rightX = cx + (radius - 6f) * Math.cos(baseRightAngle).toFloat()
+        val rightY = cy + (radius - 6f) * Math.sin(baseRightAngle).toFloat()
         
         path.moveTo(tipX, tipY)
         path.lineTo(leftX, leftY)
@@ -295,12 +295,12 @@ private fun createBusIcon(context: android.content.Context, colorInt: Int, beari
         // Draw colored inner arrow
         paint.color = colorInt
         // Re-scale slightly smaller for outline effect
-        val innerTipX = cx + (radius + 4f) * Math.cos(angleRad).toFloat()
-        val innerTipY = cy + (radius + 4f) * Math.sin(angleRad).toFloat()
-        val innerLeftX = cx + (radius - 1f) * Math.cos(baseLeftAngle).toFloat()
-        val innerLeftY = cy + (radius - 1f) * Math.sin(baseLeftAngle).toFloat()
-        val innerRightX = cx + (radius - 1f) * Math.cos(baseRightAngle).toFloat()
-        val innerRightY = cy + (radius - 1f) * Math.sin(baseRightAngle).toFloat()
+        val innerTipX = cx + (radius + 12f) * Math.cos(angleRad).toFloat()
+        val innerTipY = cy + (radius + 12f) * Math.sin(angleRad).toFloat()
+        val innerLeftX = cx + (radius - 3f) * Math.cos(baseLeftAngle).toFloat()
+        val innerLeftY = cy + (radius - 3f) * Math.sin(baseLeftAngle).toFloat()
+        val innerRightX = cx + (radius - 3f) * Math.cos(baseRightAngle).toFloat()
+        val innerRightY = cy + (radius - 3f) * Math.sin(baseRightAngle).toFloat()
         
         val innerPath = Path().apply {
             moveTo(innerTipX, innerTipY)
