@@ -64,6 +64,9 @@ dependencies {
     // DataStore (Preferences)
     implementation("androidx.datastore:datastore-preferences:1.0.0")
     
+    // Encrypted SharedPreferences for API Key
+    implementation("androidx.security:security-crypto:1.0.0")
+    
     // Retrofit & OkHttp
     implementation("com.squareup.retrofit2:retrofit:2.9.0")
     implementation("com.squareup.retrofit2:converter-gson:2.9.0")

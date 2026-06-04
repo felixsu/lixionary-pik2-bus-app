@@ -1,7 +1,9 @@
 import asyncio
+import os
 import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, Query, Path, HTTPException
+from fastapi import FastAPI, Query, Path, HTTPException, Security, Depends, status
+from fastapi.security.api_key import APIKeyHeader
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 import requests
@@ -22,6 +24,23 @@ logger = logging.getLogger(__name__)
 
 # Initialize dynamic tracking manager
 tracking_manager = TrackingManager()
+
+# API Key Validation setup
+API_KEY_NAME = "X-API-Key"
+api_key_header = APIKeyHeader(name=API_KEY_NAME, auto_error=False)
+
+def get_api_key(api_key: str = Security(api_key_header)):
+    expected_api_key = os.getenv("API_KEY")
+    if not expected_api_key:
+        # Warn if deployed but no key set, but allow for easy local testing
+        logger.warning("API_KEY environment variable is not set. API authentication is bypassed.")
+        return api_key
+    if api_key != expected_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate API Key"
+        )
+    return api_key
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -185,7 +204,7 @@ def health():
     """Simple healthcheck endpoint."""
     return {"status": "ok"}
 
-@app.get("/routes", response_model=List[Route])
+@app.get("/routes", response_model=List[Route], dependencies=[Depends(get_api_key)])
 def get_routes():
     """Retrieve all available routes."""
     try:
@@ -213,7 +232,7 @@ def get_routes():
         logger.error(f"Error getting routes: {e}")
         raise HTTPException(status_code=500, detail="Database retrieval failed")
 
-@app.get("/routes/{slug}/stops")
+@app.get("/routes/{slug}/stops", dependencies=[Depends(get_api_key)])
 async def get_stops(slug: str = Path(..., description="The route slug (e.g. ASG2, T31)")) -> list:
     """Retrieve stops and shapes for a specific route."""
     route = get_route_by_slug(slug)
@@ -230,7 +249,7 @@ async def get_stops(slug: str = Path(..., description="The route slug (e.g. ASG2
         logger.error(f"Error getting stops for {slug}: {e}")
         raise HTTPException(status_code=500, detail="Database retrieval failed")
 
-@app.get("/track")
+@app.get("/track", dependencies=[Depends(get_api_key)])
 async def track_buses(buses: str = Query(..., description="Comma-separated list of route slugs to track (e.g. ASG2,T31)")):
     """Server-Sent Events endpoint to stream real-time bus positions."""
     bus_list = [b.strip() for b in buses.split(",") if b.strip()]

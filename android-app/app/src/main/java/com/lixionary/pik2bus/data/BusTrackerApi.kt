@@ -79,12 +79,24 @@ interface BusTrackerService {
     suspend fun getStops(@Path("slug") slug: String): List<Stop>
 }
 
-class BusTrackerClient(rawBaseUrl: String) {
+class BusTrackerClient(rawBaseUrl: String, private val apiKey: String = "") {
     val baseUrl: String = sanitizeUrl(rawBaseUrl)
     private val gson = Gson()
     
+    private val okHttpClient = OkHttpClient.Builder().apply {
+        if (apiKey.isNotEmpty()) {
+            addInterceptor { chain ->
+                val request = chain.request().newBuilder()
+                    .addHeader("X-API-Key", apiKey)
+                    .build()
+                chain.proceed(request)
+            }
+        }
+    }.build()
+
     private val retrofit = Retrofit.Builder()
         .baseUrl(baseUrl)
+        .client(okHttpClient)
         .addConverterFactory(GsonConverterFactory.create(gson))
         .build()
 
@@ -131,6 +143,11 @@ class BusTrackerClient(rawBaseUrl: String) {
         val request = Request.Builder()
             .url(url)
             .header("Accept", "text/event-stream")
+            .apply {
+                if (apiKey.isNotEmpty()) {
+                    header("X-API-Key", apiKey)
+                }
+            }
             .build()
 
         val listType = object : TypeToken<List<BusPosition>>() {}.type

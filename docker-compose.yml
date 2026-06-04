@@ -12,6 +12,7 @@ services:
       - DB_PATH=/app/data/pik2_bus.db
       - PYTHONDONTWRITEBYTECODE=1
       - PYTHONUNBUFFERED=1
+      - API_KEY=${API_KEY}
     volumes:
       - backend-data:/app/data
     healthcheck:
