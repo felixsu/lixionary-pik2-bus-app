@@ -563,24 +563,38 @@ private fun getDirectionColor(baseColorStr: String, isReturn: Boolean): Int {
 }
 
 private fun createStopIcon(context: android.content.Context): com.mapbox.mapboxsdk.annotations.Icon {
-    val size = 84
+    val size = 96
     val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bitmap)
     val paint = Paint().apply {
         isAntiAlias = true
     }
 
-    // Outer white circle
+    val blueColor = Color.parseColor("#1976D2")
+
+    // 1. Draw outer white circle outline
     paint.color = Color.WHITE
     canvas.drawCircle(size / 2f, size / 2f, size / 2f, paint)
 
-    // Inner blue circle representing bus stop
-    paint.color = Color.parseColor("#1976D2") // Accent blue
-    canvas.drawCircle(size / 2f, size / 2f, size / 2f - 9f, paint)
+    // 2. Draw inner blue circle
+    paint.color = blueColor
+    canvas.drawCircle(size / 2f, size / 2f, size / 2f - 6f, paint)
 
-    // Center white dot
+    // 3. Draw white bus body
     paint.color = Color.WHITE
-    canvas.drawCircle(size / 2f, size / 2f, size / 5f, paint)
+    canvas.drawRoundRect(35f, 28f, 61f, 58f, 4f, 4f, paint)
+
+    // 4. Draw white wheels
+    canvas.drawRect(39f, 58f, 43f, 62f, paint)
+    canvas.drawRect(53f, 58f, 57f, 62f, paint)
+
+    // 5. Draw windshield cutout (in blue color)
+    paint.color = blueColor
+    canvas.drawRoundRect(39f, 33f, 57f, 43f, 2f, 2f, paint)
+
+    // 6. Draw headlights cutout (in blue color)
+    canvas.drawCircle(42f, 51f, 2.5f, paint)
+    canvas.drawCircle(54f, 51f, 2.5f, paint)
 
     return IconFactory.getInstance(context).fromBitmap(bitmap)
 }
