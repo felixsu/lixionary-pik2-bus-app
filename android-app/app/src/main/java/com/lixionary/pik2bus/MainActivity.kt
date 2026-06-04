@@ -112,21 +112,21 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // Connect to real-time SSE stream whenever selected list or backend URL changes
-            LaunchedEffect(backendUrl, selectedBuses, isEditingBuses) {
-                Log.d(TAG, "LaunchedEffect(backendUrl, selectedBuses, isEditingBuses) triggered: url='$backendUrl', selectedBuses=$selectedBuses, isEditingBuses=$isEditingBuses")
+            // Connect to real-time SSE stream for only the active focused tab route
+            LaunchedEffect(backendUrl, activeTabSlug, isEditingBuses) {
+                Log.d(TAG, "LaunchedEffect(backendUrl, activeTabSlug, isEditingBuses) triggered: url='$backendUrl', activeTabSlug='$activeTabSlug', isEditingBuses=$isEditingBuses")
                 trackingJob?.cancel()
-                if (backendUrl.isNotEmpty() && selectedBuses.isNotEmpty() && !isEditingBuses) {
-                    Log.i(TAG, "Starting SSE tracking job for buses: $selectedBuses at URL: '$backendUrl'")
+                if (backendUrl.isNotEmpty() && activeTabSlug.isNotEmpty() && !isEditingBuses) {
+                    Log.i(TAG, "Starting SSE tracking job for active bus: '$activeTabSlug' at URL: '$backendUrl'")
                     trackingJob = lifecycleScope.launch {
                         val client = BusTrackerClient(backendUrl)
-                        client.trackBuses(selectedBuses).collectLatest { positions ->
-                            Log.d(TAG, "SSE emitted ${positions.size} positions")
+                        client.trackBuses(listOf(activeTabSlug)).collectLatest { positions ->
+                            Log.d(TAG, "SSE emitted ${positions.size} positions for active bus: $activeTabSlug")
                             busPositions = positions
                         }
                     }
                 } else {
-                    Log.i(TAG, "SSE tracking job skipped or stopped. (URL empty, or no buses selected, or editing preferences)")
+                    Log.i(TAG, "SSE tracking job skipped or stopped. (URL empty, or no active tab, or editing preferences)")
                     busPositions = emptyList()
                 }
             }
@@ -342,7 +342,7 @@ fun SettingsScreen(
             Spacer(modifier = Modifier.height(24.dp))
             
             Text(
-                text = "Select Buses to Track (Max 3)",
+                text = "Select Buses to Track (Max 5)",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold,
                 color = if (isBackendHealthy) MaterialTheme.colorScheme.onBackground else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f)
@@ -403,7 +403,7 @@ fun SettingsScreen(
                                     if (isChecked) {
                                         chosenBuses.remove(route.slug)
                                     } else {
-                                        if (chosenBuses.size < 3) {
+                                        if (chosenBuses.size < 5) {
                                             chosenBuses.add(route.slug)
                                         }
                                     }
@@ -414,7 +414,7 @@ fun SettingsScreen(
                                 checked = isChecked,
                                 onCheckedChange = { checked ->
                                     if (checked) {
-                                        if (chosenBuses.size < 3) {
+                                        if (chosenBuses.size < 5) {
                                             chosenBuses.add(route.slug)
                                         }
                                     } else {
