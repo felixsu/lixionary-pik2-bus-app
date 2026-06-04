@@ -518,7 +518,7 @@ fun MainTrackerScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Pik2Bus Tracker", fontWeight = FontWeight.Bold) },
+                title = { Text("Lixionary Bus", fontWeight = FontWeight.Bold) },
                 actions = {
                     IconButton(onClick = onOpenSettings) {
                         Icon(
