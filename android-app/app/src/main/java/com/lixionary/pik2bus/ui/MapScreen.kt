@@ -78,6 +78,7 @@ fun MapScreen(
 ) {
     val context = LocalContext.current
     var mapboxMapState by remember { mutableStateOf<MapboxMap?>(null) }
+    var isStyleLoaded by remember { mutableStateOf(false) }
     
     val routePolylines = remember { mutableListOf<com.mapbox.mapboxsdk.annotations.Polyline>() }
     val stopMarkers = remember { mutableListOf<com.mapbox.mapboxsdk.annotations.Marker>() }
@@ -233,15 +234,17 @@ fun MapScreen(
     }
 
     // Clear bus markers only when the route or map state changes (tab switch)
-    LaunchedEffect(route, mapboxMapState) {
+    LaunchedEffect(route, mapboxMapState, isStyleLoaded) {
         val map = mapboxMapState ?: return@LaunchedEffect
+        if (!isStyleLoaded) return@LaunchedEffect
         busMarkersMap.values.forEach { map.removeMarker(it) }
         busMarkersMap.clear()
     }
 
-    // Draw route polylines and stops only when route, stops or map change (removes blinking)
-    LaunchedEffect(route, stops, mapboxMapState) {
+    // Draw route polylines and stops only when route, stops, map, or style change
+    LaunchedEffect(route, stops, mapboxMapState, isStyleLoaded) {
         val map = mapboxMapState ?: return@LaunchedEffect
+        if (!isStyleLoaded) return@LaunchedEffect
         
         // Remove existing static polylines and stop markers
         routePolylines.forEach { map.removePolyline(it) }
@@ -309,13 +312,15 @@ fun MapScreen(
                         mapboxMap.setMinZoomPreference(10.0)
 
                         mapboxMap.setStyle(Style.Builder().fromJson(OSM_STYLE_JSON)) {
-                            // Style loaded
+                            isStyleLoaded = true
+                            Log.d("MapScreen", "Mapbox style loaded successfully")
                         }
                     }
                 }
             },
             update = { mapView ->
                 val map = mapboxMapState ?: return@AndroidView
+                if (!isStyleLoaded) return@AndroidView
                 
                 // Get the current list of plate numbers in this update
                 val currentPlates = busPositions.map { it.plate_number }.toSet()

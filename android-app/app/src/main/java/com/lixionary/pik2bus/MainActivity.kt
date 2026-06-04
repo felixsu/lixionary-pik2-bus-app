@@ -87,9 +87,13 @@ class MainActivity : ComponentActivity() {
             var selectedBuses by remember { mutableStateOf<List<String>>(emptyList()) }
             var availableRoutes by remember { mutableStateOf<List<Route>>(emptyList()) }
             var activeStops by remember { mutableStateOf<List<Stop>>(emptyList()) }
-            var busPositions by remember { mutableStateOf<List<BusPosition>>(emptyList()) }
-            
+            var allBusPositions by remember { mutableStateOf<List<BusPosition>>(emptyList()) }
             var activeTabSlug by remember { mutableStateOf("") }
+            
+            val busPositions = remember(allBusPositions, activeTabSlug) {
+                allBusPositions.filter { it.route_slug == activeTabSlug }
+            }
+            
             var isEditingBuses by remember { mutableStateOf(false) }
             var isLoading by remember { mutableStateOf(true) }
 
@@ -153,24 +157,23 @@ class MainActivity : ComponentActivity() {
                 }
             }
 
-            // Connect to real-time SSE stream for only the active focused tab route
-            LaunchedEffect(backendUrl, activeTabSlug, apiKey, isEditingBuses) {
-                Log.d(TAG, "LaunchedEffect(backendUrl, activeTabSlug, apiKey, isEditingBuses) triggered: url='$backendUrl', activeTabSlug='$activeTabSlug', isEditingBuses=$isEditingBuses")
+            // Connect to real-time SSE stream for all selected routes
+            LaunchedEffect(backendUrl, selectedBuses, apiKey, isEditingBuses) {
+                Log.d(TAG, "LaunchedEffect(backendUrl, selectedBuses, apiKey, isEditingBuses) triggered: url='$backendUrl', selectedBuses=$selectedBuses, isEditingBuses=$isEditingBuses")
                 trackingJob?.cancel()
-                busPositions = emptyList() // Clear previous tab's positions immediately on tab switch
-                if (backendUrl.isNotEmpty() && activeTabSlug.isNotEmpty() && !isEditingBuses) {
-                    Log.i(TAG, "Starting SSE tracking job for active bus: '$activeTabSlug' at URL: '$backendUrl'")
+                allBusPositions = emptyList() // Clear positions immediately on list change
+                if (backendUrl.isNotEmpty() && selectedBuses.isNotEmpty() && !isEditingBuses) {
+                    Log.i(TAG, "Starting SSE tracking job for selected routes: $selectedBuses at URL: '$backendUrl'")
                     trackingJob = lifecycleScope.launch {
                         val client = BusTrackerClient(backendUrl, apiKey)
-                        client.trackBuses(listOf(activeTabSlug)).collectLatest { positions ->
-                            Log.d(TAG, "SSE emitted ${positions.size} positions for active bus: $activeTabSlug")
-                            val filteredPositions = positions.filter { it.route_slug == activeTabSlug }
-                            busPositions = filteredPositions
+                        client.trackBuses(selectedBuses).collectLatest { positions ->
+                            Log.d(TAG, "SSE emitted ${positions.size} positions for selected routes")
+                            allBusPositions = positions
                         }
                     }
                 } else {
-                    Log.i(TAG, "SSE tracking job skipped or stopped. (URL empty, or no active tab, or editing preferences)")
-                    busPositions = emptyList()
+                    Log.i(TAG, "SSE tracking job skipped or stopped.")
+                    allBusPositions = emptyList()
                 }
             }
 
