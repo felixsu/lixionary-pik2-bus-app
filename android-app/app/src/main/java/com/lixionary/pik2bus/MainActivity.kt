@@ -81,9 +81,8 @@ class MainActivity : ComponentActivity() {
             )
         }
 
-        setContent {
             val isLocationPermissionGranted by isLocationPermissionGrantedState
-            var backendUrl by remember { mutableStateOf(DataStoreManager.DEFAULT_BACKEND_URL) }
+            val backendUrl = "https://tj-api.lixionary.com/"
             var apiKey by remember { mutableStateOf("") }
             var selectedBuses by remember { mutableStateOf<List<String>>(emptyList()) }
             var availableRoutes by remember { mutableStateOf<List<Route>>(emptyList()) }
@@ -98,12 +97,6 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(Unit) {
                 Log.d(TAG, "onCreate: Launched startup configuration loads")
                 apiKey = encryptedPrefsManager.getApiKey()
-                lifecycleScope.launch {
-                    dataStoreManager.backendUrlFlow.collectLatest { url ->
-                        Log.d(TAG, "Startup: Loaded backendUrl from preferences: '$url'")
-                        backendUrl = url
-                    }
-                }
                 lifecycleScope.launch {
                     dataStoreManager.selectedBusesFlow.collectLatest { buses ->
                         Log.d(TAG, "Startup: Loaded selectedBuses from preferences: $buses")
@@ -195,13 +188,11 @@ class MainActivity : ComponentActivity() {
                     when {
                         isEditingBuses -> {
                             SettingsScreen(
-                                currentUrl = backendUrl,
                                 currentApiKey = apiKey,
                                 selectedBuses = selectedBuses,
-                                onSave = { newUrl, newApiKey, newBuses ->
-                                    Log.i(TAG, "Saving new configuration: URL='$newUrl', buses=$newBuses")
+                                onSave = { newApiKey, newBuses ->
+                                    Log.i(TAG, "Saving new configuration: buses=$newBuses")
                                     lifecycleScope.launch {
-                                        dataStoreManager.saveBackendUrl(newUrl)
                                         dataStoreManager.saveSelectedBuses(newBuses)
                                         encryptedPrefsManager.saveApiKey(newApiKey)
                                         apiKey = newApiKey
@@ -249,13 +240,12 @@ class MainActivity : ComponentActivity() {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
-    currentUrl: String,
     currentApiKey: String,
     selectedBuses: List<String>,
-    onSave: (String, String, List<String>) -> Unit,
+    onSave: (String, List<String>) -> Unit,
     onCancel: () -> Unit
 ) {
-    var urlInput by remember { mutableStateOf(currentUrl) }
+    val backendUrl = "https://tj-api.lixionary.com/"
     var apiKeyInput by remember { mutableStateOf(currentApiKey) }
     var isCheckingHealth by remember { mutableStateOf(false) }
     var isBackendHealthy by remember { mutableStateOf(false) }
@@ -264,42 +254,38 @@ fun SettingsScreen(
     val chosenBuses = remember { mutableStateListOf<String>().apply { addAll(selectedBuses) } }
     val scope = rememberCoroutineScope()
 
-    // Automatically check health of the current saved URL on load
+    // Automatically check health of the hardcoded URL on load
     LaunchedEffect(Unit) {
-        Log.d(TAG, "SettingsScreen: Auto healthcheck started. currentUrl='$currentUrl'")
-        if (currentUrl.isNotEmpty()) {
-            isCheckingHealth = true
-            try {
-                val client = BusTrackerClient(currentUrl, currentApiKey)
-                Log.d(TAG, "SettingsScreen: Fetching healthcheck for currentUrl='$currentUrl' (sanitized to '${client.baseUrl}')...")
-                val healthRes = client.service.checkHealth()
-                Log.i(TAG, "SettingsScreen: Health check response for '$currentUrl': $healthRes")
-                if (healthRes["status"] == "ok") {
-                    Log.d(TAG, "SettingsScreen: Health check successful. Fetching routes...")
-                    val routes = client.service.getRoutes()
-                    fetchedRoutes.clear()
-                    fetchedRoutes.addAll(routes)
-                    isBackendHealthy = true
-                    Log.i(TAG, "SettingsScreen: Auto healthcheck successful. Loaded ${routes.size} routes.")
-                } else {
-                    errorMessage = "Backend healthcheck failed: status is not ok"
-                    Log.w(TAG, "SettingsScreen: Health check response status is not 'ok': $healthRes")
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "SettingsScreen: Exception in auto healthcheck for URL: '$currentUrl'", e)
-                errorMessage = "Saved backend unreachable: ${e.localizedMessage ?: e.message}"
-            } finally {
-                isCheckingHealth = false
+        Log.d(TAG, "SettingsScreen: Auto healthcheck started.")
+        isCheckingHealth = true
+        try {
+            val client = BusTrackerClient(backendUrl, currentApiKey)
+            Log.d(TAG, "SettingsScreen: Fetching healthcheck for backendUrl='$backendUrl'...")
+            val healthRes = client.service.checkHealth()
+            Log.i(TAG, "SettingsScreen: Health check response: $healthRes")
+            if (healthRes["status"] == "ok") {
+                Log.d(TAG, "SettingsScreen: Health check successful. Fetching routes...")
+                val routes = client.service.getRoutes()
+                fetchedRoutes.clear()
+                fetchedRoutes.addAll(routes)
+                isBackendHealthy = true
+                Log.i(TAG, "SettingsScreen: Auto healthcheck successful. Loaded ${routes.size} routes.")
+            } else {
+                errorMessage = "Backend healthcheck failed: status is not ok"
+                Log.w(TAG, "SettingsScreen: Health check response status is not 'ok': $healthRes")
             }
-        } else {
-            Log.d(TAG, "SettingsScreen: No saved currentUrl to healthcheck on startup.")
+        } catch (e: Exception) {
+            Log.e(TAG, "SettingsScreen: Exception in auto healthcheck", e)
+            errorMessage = "Backend unreachable: ${e.localizedMessage ?: e.message}"
+        } finally {
+            isCheckingHealth = false
         }
     }
 
-    // Reset health state when URL or API key inputs change
-    LaunchedEffect(urlInput, apiKeyInput) {
-        Log.d(TAG, "SettingsScreen: URL/API key input changed.")
-        if (urlInput != currentUrl || apiKeyInput != currentApiKey) {
+    // Reset health state when API key input changes
+    LaunchedEffect(apiKeyInput) {
+        Log.d(TAG, "SettingsScreen: API key input changed.")
+        if (apiKeyInput != currentApiKey) {
             Log.d(TAG, "SettingsScreen: Input differs from current settings. Resetting health and fetched routes.")
             isBackendHealthy = false
             fetchedRoutes.clear()
@@ -324,22 +310,6 @@ fun SettingsScreen(
                 .fillMaxSize()
         ) {
             Text(
-                text = "Backend Base URL (VPN IP)",
-                style = MaterialTheme.typography.titleMedium,
-                fontWeight = FontWeight.Bold
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            OutlinedTextField(
-                value = urlInput,
-                onValueChange = { urlInput = it },
-                modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("e.g. http://192.168.1.100:8020/") },
-                singleLine = true
-            )
-            
-            Spacer(modifier = Modifier.height(16.dp))
-            
-            Text(
                 text = "API Key",
                 style = MaterialTheme.typography.titleMedium,
                 fontWeight = FontWeight.Bold
@@ -358,13 +328,13 @@ fun SettingsScreen(
             Button(
                 onClick = {
                     scope.launch {
-                        Log.i(TAG, "SettingsScreen: 'Connect' clicked. Checking URL input: '$urlInput'")
+                        Log.i(TAG, "SettingsScreen: 'Connect' clicked.")
                         isCheckingHealth = true
                         errorMessage = null
                         isBackendHealthy = false
                         try {
-                            val client = BusTrackerClient(urlInput, apiKeyInput)
-                            Log.d(TAG, "SettingsScreen: Requesting health from client.baseUrl='${client.baseUrl}'...")
+                            val client = BusTrackerClient(backendUrl, apiKeyInput)
+                            Log.d(TAG, "SettingsScreen: Requesting health...")
                             val healthRes = client.service.checkHealth()
                             Log.i(TAG, "SettingsScreen: Connect healthcheck response: $healthRes")
                             if (healthRes["status"] == "ok") {
@@ -379,7 +349,7 @@ fun SettingsScreen(
                                 Log.w(TAG, "SettingsScreen: Health check status not 'ok': $healthRes")
                             }
                         } catch (e: Exception) {
-                            Log.e(TAG, "SettingsScreen: Exception checking health for URL input '$urlInput'", e)
+                            Log.e(TAG, "SettingsScreen: Exception checking health", e)
                             errorMessage = "Failed to connect: ${e.localizedMessage ?: e.message}"
                         } finally {
                             isCheckingHealth = false
@@ -387,7 +357,7 @@ fun SettingsScreen(
                     }
                 },
                 modifier = Modifier.align(Alignment.End),
-                enabled = urlInput.isNotEmpty() && !isCheckingHealth
+                enabled = !isCheckingHealth
             ) {
                 if (isCheckingHealth) {
                     CircularProgressIndicator(
@@ -519,7 +489,7 @@ fun SettingsScreen(
                 }
                 Spacer(modifier = Modifier.width(16.dp))
                 Button(
-                    onClick = { onSave(urlInput, apiKeyInput, chosenBuses.toList()) },
+                    onClick = { onSave(apiKeyInput, chosenBuses.toList()) },
                     enabled = isBackendHealthy && chosenBuses.isNotEmpty()
                 ) {
                     Text("Save Config")
