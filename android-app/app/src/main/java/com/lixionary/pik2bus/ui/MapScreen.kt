@@ -93,29 +93,29 @@ fun MapScreen(
     var initialCameraSet by remember { mutableStateOf(false) }
     var hasCenteredOnNewLocation by remember { mutableStateOf(false) }
     var currentUserLocation by remember { mutableStateOf<Location?>(null) }
-    var selectedPlateNumber by remember { mutableStateOf<String?>(null) }
+    var selectedVehicleId by remember { mutableStateOf<String?>(null) }
 
-    // Reset selected bus plate number on tab/route switch
+    // Reset selected bus vehicle ID on tab/route switch
     LaunchedEffect(route) {
-        selectedPlateNumber = null
+        selectedVehicleId = null
     }
 
-    // Listen for marker clicks to track selected bus plate number (persists info window on SSE updates)
+    // Listen for marker clicks to track selected bus vehicle ID (persists info window on SSE updates)
     LaunchedEffect(mapboxMapState) {
         val map = mapboxMapState ?: return@LaunchedEffect
         map.setOnMarkerClickListener { marker ->
             val title = marker.title ?: ""
             if (title.startsWith("Bus ")) {
-                val plate = title.substringAfter("Bus ").substringBefore(" (").trim()
-                selectedPlateNumber = plate
-                Log.d("MapScreen", "Marker clicked. Tracking selected bus plate: '$plate'")
+                val vehicleId = title.substringAfter("Bus ").substringBefore(" (").trim()
+                selectedVehicleId = vehicleId
+                Log.d("MapScreen", "Marker clicked. Tracking selected bus vehicle ID: '$vehicleId'")
             } else {
-                selectedPlateNumber = null
+                selectedVehicleId = null
             }
             false // return false so Mapbox default behavior (show info window) still runs
         }
         map.addOnMapClickListener {
-            selectedPlateNumber = null
+            selectedVehicleId = null
             true
         }
     }
@@ -322,14 +322,14 @@ fun MapScreen(
                 val map = mapboxMapState ?: return@AndroidView
                 if (!isStyleLoaded) return@AndroidView
                 
-                // Get the current list of plate numbers in this update
-                val currentPlates = busPositions.map { it.plate_number }.toSet()
+                // Get the current list of vehicle IDs in this update
+                val currentVehicleIds = busPositions.map { it.vehicle_id }.toSet()
                 
                 // Remove markers for buses that are no longer active
-                val toRemove = busMarkersMap.keys.filter { it !in currentPlates }
-                toRemove.forEach { plate ->
-                    busMarkersMap[plate]?.let { map.removeMarker(it) }
-                    busMarkersMap.remove(plate)
+                val toRemove = busMarkersMap.keys.filter { it !in currentVehicleIds }
+                toRemove.forEach { vehicleId ->
+                    busMarkersMap[vehicleId]?.let { map.removeMarker(it) }
+                    busMarkersMap.remove(vehicleId)
                 }
                 
                 // Update or add active bus markers
@@ -364,18 +364,18 @@ fun MapScreen(
                     }
 
                     val directionLabel = if (isReturnTrip) " (Return)" else " (Outbound)"
-                    val title = "Bus ${bus.plate_number}$directionLabel"
+                    val title = "Bus ${bus.vehicle_id} (${bus.plate_number})$directionLabel"
                     val snippet = "Speed: ${bus.speed_kmh.toInt()} km/h | Operator: ${bus.operator}"
                     val position = MapboxLatLng(bus.location.lat, bus.location.lng)
 
-                    val existingMarker = busMarkersMap[bus.plate_number]
+                    val existingMarker = busMarkersMap[bus.vehicle_id]
                     if (existingMarker != null) {
                         // Update position and metadata in place
                         existingMarker.position = position
                         existingMarker.title = title
                         existingMarker.snippet = snippet
                         
-                        if (bus.plate_number == selectedPlateNumber) {
+                        if (bus.vehicle_id == selectedVehicleId) {
                             // If selected, update in-place without changing icon or recreating 
                             // to ensure the info window callout remains open and doesn't flicker.
                             map.updateMarker(existingMarker)
@@ -392,7 +392,7 @@ fun MapScreen(
                                         .snippet(snippet)
                                         .icon(busIcon)
                                 )
-                                busMarkersMap[bus.plate_number] = newMarker
+                                busMarkersMap[bus.vehicle_id] = newMarker
                             } else {
                                 map.updateMarker(existingMarker)
                             }
@@ -406,12 +406,12 @@ fun MapScreen(
                                 .snippet(snippet)
                                 .icon(busIcon)
                         )
-                        busMarkersMap[bus.plate_number] = marker
+                        busMarkersMap[bus.vehicle_id] = marker
                     }
 
                     // Restore selected info window if this bus was selected
-                    if (bus.plate_number == selectedPlateNumber) {
-                        val markerToSelect = busMarkersMap[bus.plate_number]
+                    if (bus.vehicle_id == selectedVehicleId) {
+                        val markerToSelect = busMarkersMap[bus.vehicle_id]
                         if (markerToSelect != null) {
                             map.selectMarker(markerToSelect)
                         }
