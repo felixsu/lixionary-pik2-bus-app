@@ -23,6 +23,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.lixionary.pik2bus.data.BusPosition
@@ -89,6 +90,33 @@ fun MapScreen(
     var initialCameraCenter by remember { mutableStateOf<MapboxLatLng?>(null) }
     var initialCameraSet by remember { mutableStateOf(false) }
     var hasCenteredOnNewLocation by remember { mutableStateOf(false) }
+    var currentUserLocation by remember { mutableStateOf<Location?>(null) }
+    var selectedPlateNumber by remember { mutableStateOf<String?>(null) }
+
+    // Reset selected bus plate number on tab/route switch
+    LaunchedEffect(route) {
+        selectedPlateNumber = null
+    }
+
+    // Listen for marker clicks to track selected bus plate number (persists info window on SSE updates)
+    LaunchedEffect(mapboxMapState) {
+        val map = mapboxMapState ?: return@LaunchedEffect
+        map.setOnMarkerClickListener { marker ->
+            val title = marker.title ?: ""
+            if (title.startsWith("Bus ")) {
+                val plate = title.substringAfter("Bus ").substringBefore(" (").trim()
+                selectedPlateNumber = plate
+                Log.d("MapScreen", "Marker clicked. Tracking selected bus plate: '$plate'")
+            } else {
+                selectedPlateNumber = null
+            }
+            false // return false so Mapbox default behavior (show info window) still runs
+        }
+        map.addOnMapClickListener {
+            selectedPlateNumber = null
+            true
+        }
+    }
 
     // Load initial user location from DataStore on startup (with Jakarta default fallback)
     LaunchedEffect(Unit) {
@@ -124,6 +152,7 @@ fun MapScreen(
         val listener = object : LocationListener {
             override fun onLocationChanged(location: Location) {
                 Log.d("MapScreen", "Location updated: ${location.latitude}, ${location.longitude}")
+                currentUserLocation = location
                 // Save coordinates to DataStore
                 coroutineScope.launch {
                     dataStoreManager.saveLastUserLocation(location.latitude, location.longitude)
@@ -154,8 +183,11 @@ fun MapScreen(
             
             // Get last known location to set initial center if nothing is stored
             val lastKnown = locationManager.getLastKnownLocation(provider)
-            if (lastKnown != null && initialCameraCenter == null) {
-                initialCameraCenter = MapboxLatLng(lastKnown.latitude, lastKnown.longitude)
+            if (lastKnown != null) {
+                currentUserLocation = lastKnown
+                if (initialCameraCenter == null) {
+                    initialCameraCenter = MapboxLatLng(lastKnown.latitude, lastKnown.longitude)
+                }
             }
             
             locationManager.requestLocationUpdates(provider, 5000L, 5f, listener)
@@ -311,10 +343,49 @@ fun MapScreen(
                             .icon(busIcon)
                     )
                     busMarkers.add(marker)
+
+                    // Restore selected info window if this bus was selected
+                    if (bus.plate_number == selectedPlateNumber) {
+                        map.selectMarker(marker)
+                    }
                 }
             },
             modifier = Modifier.fillMaxSize()
         )
+
+        // Calculate the closest 4 buses to the user's location
+        val closestBuses = remember(busPositions, currentUserLocation) {
+            val userLoc = currentUserLocation
+            if (userLoc == null || busPositions.isEmpty()) {
+                emptyList()
+            } else {
+                busPositions.map { bus ->
+                    val results = FloatArray(1)
+                    Location.distanceBetween(
+                        userLoc.latitude,
+                        userLoc.longitude,
+                        bus.location.lat,
+                        bus.location.lng,
+                        results
+                    )
+                    val distanceMeters = results[0]
+
+                    val stopIndex = stops.indexOfFirst { it.id == (bus.next_stop_id ?: bus.last_stop_id) }
+                    val isReturnTrip = if (stopIndex != -1 && stops.size > 1) {
+                        stopIndex >= stops.size / 2
+                    } else {
+                        bus.trip_headsign?.contains("Blok M", ignoreCase = true) == true ||
+                        bus.trip_headsign?.contains("Balai Kota", ignoreCase = true) == true ||
+                        bus.trip_headsign?.contains("Kota", ignoreCase = true) == true
+                    }
+                    val directionLabel = if (isReturnTrip) "Return" else "Outbound"
+
+                    bus to Triple(bus.plate_number, distanceMeters, directionLabel)
+                }
+                .sortedBy { it.second.second }
+                .take(4)
+            }
+        }
 
         // Floating action button for GPS center-on-my-location
         if (isLocationPermissionGranted && mapboxMapState != null) {
@@ -335,7 +406,14 @@ fun MapScreen(
                 },
                 modifier = Modifier
                     .align(Alignment.BottomEnd)
-                    .padding(end = 16.dp, bottom = if (approachingBus != null) 140.dp else 16.dp), // Position above approaching bus card if visible
+                    .padding(
+                        end = 16.dp,
+                        bottom = if (busPositions.isEmpty() || currentUserLocation == null) {
+                            120.dp
+                        } else {
+                            (120 + closestBuses.size * 56).dp
+                        }
+                    ),
                 containerColor = MaterialTheme.colorScheme.primaryContainer,
                 contentColor = MaterialTheme.colorScheme.onPrimaryContainer
             ) {
@@ -346,37 +424,84 @@ fun MapScreen(
             }
         }
 
-        // Overlay card showing info of closest approaching bus
-        approachingBus?.let { bus ->
-            Card(
-                modifier = Modifier
-                    .align(Alignment.BottomCenter)
-                    .padding(16.dp)
-                    .fillMaxWidth(),
-                shape = RoundedCornerShape(16.dp),
-                elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
-                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        // Overlay card showing info of the 4 closest buses to the user's location
+        Card(
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(16.dp)
+                .fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 8.dp),
+            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp)
             ) {
-                Column(
-                    modifier = Modifier.padding(16.dp)
-                ) {
-                    Text(
-                        text = "Approaching Bus: ${bus.plate_number} (${bus.operator})",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                    Spacer(modifier = Modifier.height(4.dp))
-                    Text(
-                        text = "ETA: ${bus.eta_seconds?.let { "${it / 60}m ${it % 60}s" } ?: "Unknown"}",
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.primary
-                    )
-                    bus.distance_to_next_m?.let { dist ->
+                Text(
+                    text = "Closest Buses (Active Tab)",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+
+                when {
+                    busPositions.isEmpty() -> {
                         Text(
-                            text = "Distance: ${"%.0f".format(dist)} m to next stop",
+                            text = "No active buses currently tracking.",
                             style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                         )
+                    }
+                    currentUserLocation == null -> {
+                        Text(
+                            text = "Waiting for GPS signal to calculate distances...",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        )
+                    }
+                    else -> {
+                        closestBuses.forEachIndexed { index, (_, info) ->
+                            val (plate, distance, direction) = info
+                            val distanceText = if (distance >= 1000f) {
+                                "%.1f km".format(distance / 1000f)
+                            } else {
+                                "%.0f m".format(distance)
+                            }
+
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 4.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Column {
+                                    Text(
+                                        text = plate,
+                                        style = MaterialTheme.typography.bodyLarge,
+                                        fontWeight = FontWeight.SemiBold
+                                    )
+                                    Text(
+                                        text = "Direction: $direction",
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                                    )
+                                }
+                                Text(
+                                    text = distanceText,
+                                    style = MaterialTheme.typography.titleMedium,
+                                    color = MaterialTheme.colorScheme.primary,
+                                    fontWeight = FontWeight.Bold
+                                )
+                            }
+                            if (index < closestBuses.size - 1) {
+                                Divider(
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.15f),
+                                    modifier = Modifier.padding(vertical = 2.dp)
+                                )
+                            }
+                        }
                     }
                 }
             }

@@ -160,6 +160,7 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(backendUrl, activeTabSlug, isEditingBuses) {
                 Log.d(TAG, "LaunchedEffect(backendUrl, activeTabSlug, isEditingBuses) triggered: url='$backendUrl', activeTabSlug='$activeTabSlug', isEditingBuses=$isEditingBuses")
                 trackingJob?.cancel()
+                busPositions = emptyList() // Clear previous tab's positions immediately on tab switch
                 if (backendUrl.isNotEmpty() && activeTabSlug.isNotEmpty() && !isEditingBuses) {
                     Log.i(TAG, "Starting SSE tracking job for active bus: '$activeTabSlug' at URL: '$backendUrl'")
                     trackingJob = lifecycleScope.launch {
