@@ -82,7 +82,7 @@ fun MapScreen(
                             mapboxMap.moveCamera(
                                 CameraUpdateFactory.newLatLngZoom(
                                     MapboxLatLng(center.lat, center.lng),
-                                    (route.initial_zoom ?: 12).toFloat()
+                                    (route.initial_zoom ?: 12).toDouble()
                                 )
                             )
                         }
