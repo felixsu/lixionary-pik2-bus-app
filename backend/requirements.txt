@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+python-socketio
+aiohttp
+websocket-client
+pydantic>=2.0
+requests
