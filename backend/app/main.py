@@ -12,7 +12,8 @@ from app.db import (
     init_db, save_route, save_stop, save_route_stop,
     get_all_routes, get_route_by_slug, get_route_stops
 )
-from app.schemas import normalize_sedayu_route, normalize_tj_route, LatLng
+from typing import List
+from app.schemas import normalize_sedayu_route, normalize_tj_route, LatLng, Route
 from app.tracking import TrackingManager
 
 # Configure logging
@@ -201,11 +202,30 @@ def health():
     """Simple healthcheck endpoint."""
     return {"status": "ok"}
 
-@app.get("/routes")
+@app.get("/routes", response_model=List[Route])
 def get_routes():
     """Retrieve all available routes."""
     try:
-        return get_all_routes()
+        raw_routes = get_all_routes()
+        routes = []
+        for r in raw_routes:
+            center = None
+            if r.get("initial_lat") is not None and r.get("initial_lng") is not None:
+                center = LatLng(lat=r["initial_lat"], lng=r["initial_lng"])
+            
+            routes.append(Route(
+                id=r.get("id"),
+                slug=r["slug"],
+                code=r["code"],
+                name=r["name"],
+                type=r["type"],
+                operator=r["operator"],
+                is_active=bool(r["is_active"]),
+                color=r["color"],
+                initial_map_center=center,
+                initial_zoom=r.get("initial_zoom")
+            ))
+        return routes
     except Exception as e:
         logger.error(f"Error getting routes: {e}")
         raise HTTPException(status_code=500, detail="Database retrieval failed")

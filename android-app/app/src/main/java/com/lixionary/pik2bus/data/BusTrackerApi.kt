@@ -1,5 +1,6 @@
 package com.lixionary.pik2bus.data
 
+import android.util.Log
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.Dispatchers
@@ -17,6 +18,8 @@ import retrofit2.http.GET
 import retrofit2.http.Path
 import java.io.IOException
 import java.util.concurrent.TimeUnit
+
+private const val TAG = "Pik2Bus_Api"
 
 data class LatLng(val lat: Double, val lng: Double)
 
@@ -76,13 +79,33 @@ interface BusTrackerService {
     suspend fun getStops(@Path("slug") slug: String): List<Stop>
 }
 
-class BusTrackerClient(private val baseUrl: String) {
+class BusTrackerClient(rawBaseUrl: String) {
+    val baseUrl: String = sanitizeUrl(rawBaseUrl)
     private val gson = Gson()
     
     private val retrofit = Retrofit.Builder()
         .baseUrl(baseUrl)
         .addConverterFactory(GsonConverterFactory.create(gson))
         .build()
+
+    init {
+        Log.i(TAG, "BusTrackerClient initialized. Raw URL: '$rawBaseUrl', Sanitized URL: '$baseUrl'")
+    }
+
+    companion object {
+        fun sanitizeUrl(url: String): String {
+            var cleanUrl = url.trim()
+            if (cleanUrl.isEmpty()) return cleanUrl
+            if (!cleanUrl.startsWith("http://", ignoreCase = true) && 
+                !cleanUrl.startsWith("https://", ignoreCase = true)) {
+                cleanUrl = "http://$cleanUrl"
+            }
+            if (!cleanUrl.endsWith("/")) {
+                cleanUrl = "$cleanUrl/"
+            }
+            return cleanUrl
+        }
+    }
 
     val service: BusTrackerService = retrofit.create(BusTrackerService::class.java)
 
@@ -91,12 +114,14 @@ class BusTrackerClient(private val baseUrl: String) {
      */
     fun trackBuses(buses: List<String>): Flow<List<BusPosition>> = flow {
         if (buses.isEmpty()) {
+            Log.d(TAG, "trackBuses: Request list is empty, skipping SSE connection")
             emit(emptyList())
             return@flow
         }
 
         val busesParam = buses.joinToString(",")
         val url = "${baseUrl}track?buses=$busesParam"
+        Log.i(TAG, "trackBuses: Starting SSE stream connection to: $url")
         
         val client = OkHttpClient.Builder()
             .readTimeout(0, TimeUnit.MILLISECONDS) // Infinite timeout for SSE stream
@@ -112,32 +137,38 @@ class BusTrackerClient(private val baseUrl: String) {
 
         while (currentCoroutineContext().isActive) {
             try {
+                Log.d(TAG, "trackBuses: Connecting to stream...")
                 client.newCall(request).execute().use { response ->
-                    if (!response.isSuccessful) throw IOException("Server returned error: $response")
+                    Log.i(TAG, "trackBuses: Connection established. HTTP code: ${response.code}")
+                    if (!response.isSuccessful) throw IOException("Server returned error code: ${response.code}")
                     
                     val body = response.body ?: throw IOException("Empty response body")
                     val reader = body.charStream().buffered()
+                    Log.d(TAG, "trackBuses: Reading SSE stream characters...")
                     
                     var line: String? = reader.readLine()
                     while (currentCoroutineContext().isActive && line != null) {
+                        Log.v(TAG, "trackBuses line: $line")
                         if (line.startsWith("data:")) {
                             val dataJson = line.removePrefix("data:").trim()
                             if (dataJson.isNotEmpty()) {
                                 try {
                                     val positions: List<BusPosition> = gson.fromJson(dataJson, listType)
+                                    Log.d(TAG, "trackBuses: Parsed ${positions.size} bus positions")
                                     emit(positions)
                                 } catch (e: Exception) {
-                                    // Ignore parse errors on malformed payloads
+                                    Log.e(TAG, "trackBuses: Error parsing JSON payload: $dataJson", e)
                                 }
                             }
                         }
                         line = reader.readLine()
                     }
+                    Log.i(TAG, "trackBuses: SSE stream loop terminated or connection closed by server")
                 }
             } catch (e: Exception) {
-                // Emit empty list or handle errors
+                Log.e(TAG, "trackBuses: Error in stream connection: ${e.message}", e)
                 emit(emptyList())
-                // Wait before retrying connection
+                Log.i(TAG, "trackBuses: Waiting 5s before reconnecting...")
                 delay(5000)
             }
         }

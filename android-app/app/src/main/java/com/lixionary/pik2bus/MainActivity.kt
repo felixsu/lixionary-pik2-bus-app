@@ -1,6 +1,7 @@
 package com.lixionary.pik2bus
 
 import android.os.Bundle
+import android.util.Log
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -24,6 +25,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
+private const val TAG = "Pik2Bus_Main"
+
 class MainActivity : ComponentActivity() {
     private lateinit var dataStoreManager: DataStoreManager
     private var trackingJob: Job? = null
@@ -45,19 +48,24 @@ class MainActivity : ComponentActivity() {
 
             // Load saved settings on startup
             LaunchedEffect(Unit) {
+                Log.d(TAG, "onCreate: Launched startup configuration loads")
                 lifecycleScope.launch {
                     dataStoreManager.backendUrlFlow.collectLatest { url ->
+                        Log.d(TAG, "Startup: Loaded backendUrl from preferences: '$url'")
                         backendUrl = url
                     }
                 }
                 lifecycleScope.launch {
                     dataStoreManager.selectedBusesFlow.collectLatest { buses ->
+                        Log.d(TAG, "Startup: Loaded selectedBuses from preferences: $buses")
                         selectedBuses = buses
                         if (buses.isEmpty()) {
+                            Log.i(TAG, "Startup: Selected buses list is empty. Redirecting to settings screen.")
                             isEditingBuses = true
                         } else {
                             if (activeTabSlug.isEmpty() || !buses.contains(activeTabSlug)) {
                                 activeTabSlug = buses.first()
+                                Log.d(TAG, "Startup: Set active tab slug to: '$activeTabSlug'")
                             }
                         }
                     }
@@ -66,13 +74,17 @@ class MainActivity : ComponentActivity() {
 
             // Fetch available routes and stops based on selected config
             LaunchedEffect(backendUrl, isEditingBuses) {
+                Log.d(TAG, "LaunchedEffect(backendUrl, isEditingBuses) triggered: url='$backendUrl', isEditingBuses=$isEditingBuses")
                 if (backendUrl.isNotEmpty() && !isEditingBuses) {
                     isLoading = true
                     try {
+                        Log.i(TAG, "Fetching available routes from backend URL: '$backendUrl'")
                         val client = BusTrackerClient(backendUrl)
                         availableRoutes = client.service.getRoutes()
+                        Log.i(TAG, "Successfully loaded ${availableRoutes.size} available routes from backend")
                         isLoading = false
                     } catch (e: Exception) {
+                        Log.e(TAG, "Error fetching available routes from backend URL '$backendUrl'", e)
                         isLoading = false
                         Toast.makeText(
                             this@MainActivity,
@@ -85,11 +97,15 @@ class MainActivity : ComponentActivity() {
 
             // Fetch stops for the active focused tab route
             LaunchedEffect(backendUrl, activeTabSlug) {
+                Log.d(TAG, "LaunchedEffect(backendUrl, activeTabSlug) triggered: url='$backendUrl', activeTabSlug='$activeTabSlug'")
                 if (backendUrl.isNotEmpty() && activeTabSlug.isNotEmpty()) {
                     try {
+                        Log.i(TAG, "Fetching stops for route: '$activeTabSlug'")
                         val client = BusTrackerClient(backendUrl)
                         activeStops = client.service.getStops(activeTabSlug)
+                        Log.i(TAG, "Successfully loaded ${activeStops.size} stops for route '$activeTabSlug'")
                     } catch (e: Exception) {
+                        Log.e(TAG, "Error fetching stops for route '$activeTabSlug' from URL '$backendUrl'", e)
                         activeStops = emptyList()
                     }
                 }
@@ -97,15 +113,19 @@ class MainActivity : ComponentActivity() {
 
             // Connect to real-time SSE stream whenever selected list or backend URL changes
             LaunchedEffect(backendUrl, selectedBuses, isEditingBuses) {
+                Log.d(TAG, "LaunchedEffect(backendUrl, selectedBuses, isEditingBuses) triggered: url='$backendUrl', selectedBuses=$selectedBuses, isEditingBuses=$isEditingBuses")
                 trackingJob?.cancel()
                 if (backendUrl.isNotEmpty() && selectedBuses.isNotEmpty() && !isEditingBuses) {
+                    Log.i(TAG, "Starting SSE tracking job for buses: $selectedBuses at URL: '$backendUrl'")
                     trackingJob = lifecycleScope.launch {
                         val client = BusTrackerClient(backendUrl)
                         client.trackBuses(selectedBuses).collectLatest { positions ->
+                            Log.d(TAG, "SSE emitted ${positions.size} positions")
                             busPositions = positions
                         }
                     }
                 } else {
+                    Log.i(TAG, "SSE tracking job skipped or stopped. (URL empty, or no buses selected, or editing preferences)")
                     busPositions = emptyList()
                 }
             }
@@ -127,6 +147,7 @@ class MainActivity : ComponentActivity() {
                                 currentUrl = backendUrl,
                                 selectedBuses = selectedBuses,
                                 onSave = { newUrl, newBuses ->
+                                    Log.i(TAG, "Saving new configuration: URL='$newUrl', buses=$newBuses")
                                     lifecycleScope.launch {
                                         dataStoreManager.saveBackendUrl(newUrl)
                                         dataStoreManager.saveSelectedBuses(newBuses)
@@ -134,6 +155,7 @@ class MainActivity : ComponentActivity() {
                                     }
                                 },
                                 onCancel = {
+                                    Log.d(TAG, "Cancel configuration edit clicked. Selected buses: $selectedBuses")
                                     if (selectedBuses.isNotEmpty()) {
                                         isEditingBuses = false
                                     } else {
@@ -187,28 +209,41 @@ fun SettingsScreen(
 
     // Automatically check health of the current saved URL on load
     LaunchedEffect(Unit) {
+        Log.d(TAG, "SettingsScreen: Auto healthcheck started. currentUrl='$currentUrl'")
         if (currentUrl.isNotEmpty()) {
             isCheckingHealth = true
             try {
                 val client = BusTrackerClient(currentUrl)
+                Log.d(TAG, "SettingsScreen: Fetching healthcheck for currentUrl='$currentUrl' (sanitized to '${client.baseUrl}')...")
                 val healthRes = client.service.checkHealth()
+                Log.i(TAG, "SettingsScreen: Health check response for '$currentUrl': $healthRes")
                 if (healthRes["status"] == "ok") {
+                    Log.d(TAG, "SettingsScreen: Health check successful. Fetching routes...")
                     val routes = client.service.getRoutes()
                     fetchedRoutes.clear()
                     fetchedRoutes.addAll(routes)
                     isBackendHealthy = true
+                    Log.i(TAG, "SettingsScreen: Auto healthcheck successful. Loaded ${routes.size} routes.")
+                } else {
+                    errorMessage = "Backend healthcheck failed: status is not ok"
+                    Log.w(TAG, "SettingsScreen: Health check response status is not 'ok': $healthRes")
                 }
             } catch (e: Exception) {
+                Log.e(TAG, "SettingsScreen: Exception in auto healthcheck for URL: '$currentUrl'", e)
                 errorMessage = "Saved backend unreachable: ${e.localizedMessage ?: e.message}"
             } finally {
                 isCheckingHealth = false
             }
+        } else {
+            Log.d(TAG, "SettingsScreen: No saved currentUrl to healthcheck on startup.")
         }
     }
 
     // Reset health state when URL input changes
     LaunchedEffect(urlInput) {
+        Log.d(TAG, "SettingsScreen: URL input changed. urlInput='$urlInput', currentUrl='$currentUrl'")
         if (urlInput != currentUrl) {
+            Log.d(TAG, "SettingsScreen: urlInput differs from currentUrl. Resetting health and fetched routes.")
             isBackendHealthy = false
             fetchedRoutes.clear()
             errorMessage = null
@@ -252,21 +287,28 @@ fun SettingsScreen(
                 Button(
                     onClick = {
                         scope.launch {
+                            Log.i(TAG, "SettingsScreen: 'Connect' clicked. Checking URL input: '$urlInput'")
                             isCheckingHealth = true
                             errorMessage = null
                             isBackendHealthy = false
                             try {
                                 val client = BusTrackerClient(urlInput)
+                                Log.d(TAG, "SettingsScreen: Requesting health from client.baseUrl='${client.baseUrl}'...")
                                 val healthRes = client.service.checkHealth()
+                                Log.i(TAG, "SettingsScreen: Connect healthcheck response: $healthRes")
                                 if (healthRes["status"] == "ok") {
+                                    Log.d(TAG, "SettingsScreen: Health check OK. Loading available routes...")
                                     val routes = client.service.getRoutes()
                                     fetchedRoutes.clear()
                                     fetchedRoutes.addAll(routes)
                                     isBackendHealthy = true
+                                    Log.i(TAG, "SettingsScreen: Successfully connected. Loaded ${routes.size} routes.")
                                 } else {
                                     errorMessage = "Backend healthcheck failed: status is not ok"
+                                    Log.w(TAG, "SettingsScreen: Health check status not 'ok': $healthRes")
                                 }
                             } catch (e: Exception) {
+                                Log.e(TAG, "SettingsScreen: Exception checking health for URL input '$urlInput'", e)
                                 errorMessage = "Failed to connect: ${e.localizedMessage ?: e.message}"
                             } finally {
                                 isCheckingHealth = false
