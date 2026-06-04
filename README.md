@@ -41,6 +41,37 @@ Run the unit test suite (testing normalizers, database safety parameters, and SQ
 uv run python tests/test_backend.py
 ```
 
+## 🐳 Backend Setup & Execution (using Docker & Docker Compose)
+
+Alternatively, you can run the backend service using Docker and Docker Compose. This maps the service to port `8020` and persists the SQLite database.
+
+### 1. Build and Run using Docker Compose
+From the project root:
+```bash
+docker compose up -d --build
+```
+Or from the `backend/` directory:
+```bash
+cd backend
+docker compose up -d --build
+```
+
+### 2. Verify Health Status
+Check container status and logs:
+```bash
+docker compose ps
+docker compose logs -f
+```
+The FastAPI backend service will be accessible at `http://localhost:8020`. You can query the health endpoint:
+```bash
+curl http://localhost:8020/health
+```
+
+### 3. SQLite Database Persistence
+The SQLite database is stored in a persistent Docker volume named `backend-data` mapped to `/app/data/pik2_bus.db` in the container.
+
+---
+
 ### 4. Dynamic Connection Policy
 The backend is designed to be **completely idle** until an active client connects to `/track`. 
 - When you open the Android app to track routes, the backend automatically connects to the Sedayu Socket.IO feed and starts polling the TransJakarta REST API.

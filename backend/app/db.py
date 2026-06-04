@@ -1,10 +1,15 @@
 import sqlite3
 import json
+import os
 from typing import List, Optional, Dict, Any
 
-DB_PATH = "pik2_bus.db"
+DB_PATH = os.getenv("DB_PATH", "pik2_bus.db")
 
 def get_db_connection() -> sqlite3.Connection:
+    # Ensure the parent directory exists if a path is specified
+    db_dir = os.path.dirname(DB_PATH)
+    if db_dir:
+        os.makedirs(db_dir, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
