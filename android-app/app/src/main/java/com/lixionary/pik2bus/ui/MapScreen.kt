@@ -351,7 +351,7 @@ fun MapScreen(
                     val busIcon = createBusIcon(context, busColorInt, bus.bearing)
                     val directionLabel = if (isReturnTrip) " (Return)" else " (Outbound)"
                     val title = "Bus ${bus.plate_number}$directionLabel"
-                    val snippet = "Speed: ${bus.speed_kmh} km/h | Operator: ${bus.operator}"
+                    val snippet = "Speed: ${bus.speed_kmh.toInt()} km/h | Operator: ${bus.operator}"
                     val position = MapboxLatLng(bus.location.lat, bus.location.lng)
 
                     val existingMarker = busMarkersMap[bus.plate_number]
