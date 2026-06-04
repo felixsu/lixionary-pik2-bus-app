@@ -4,3 +4,9 @@ __pycache__/
 .venv/
 *.egg-info/
 *.db
+# Android Studio
+.gradle/
+build/
+local.properties
+.idea/workspace.xml
+.idea/caches/
