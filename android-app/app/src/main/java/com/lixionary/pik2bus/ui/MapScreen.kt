@@ -12,6 +12,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.lixionary.pik2bus.data.BusPosition
@@ -61,13 +62,59 @@ fun MapScreen(
     busPositions: List<BusPosition>,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     var mapboxMapState by remember { mutableStateOf<MapboxMap?>(null) }
     
+    val routePolylines = remember { mutableListOf<com.mapbox.mapboxsdk.annotations.Polyline>() }
+    val stopMarkers = remember { mutableListOf<com.mapbox.mapboxsdk.annotations.Marker>() }
+    val busMarkers = remember { mutableListOf<com.mapbox.mapboxsdk.annotations.Marker>() }
+
     // Nearest bus calculation
     val approachingBus = remember(busPositions) {
         busPositions
             .filter { it.eta_seconds != null && it.eta_seconds > 0 }
             .minByOrNull { it.eta_seconds!! }
+    }
+
+    // Draw route polylines and stops only when route, stops or map change (removes blinking)
+    LaunchedEffect(route, stops, mapboxMapState) {
+        val map = mapboxMapState ?: return@LaunchedEffect
+        
+        // Remove existing static polylines and stop markers
+        routePolylines.forEach { map.removePolyline(it) }
+        routePolylines.clear()
+        
+        stopMarkers.forEach { map.removeMarker(it) }
+        stopMarkers.clear()
+        
+        // Draw route polylines in solid single color (Indigo #3F51B5)
+        stops.forEach { stop ->
+            stop.polyline?.let { points ->
+                if (points.isNotEmpty()) {
+                    val lineOptions = PolylineOptions()
+                        .addAll(points.map { MapboxLatLng(it.lat, it.lng) })
+                        .color(Color.parseColor("#3F51B5"))
+                        .width(4f)
+                    val polyline = map.addPolyline(lineOptions)
+                    routePolylines.add(polyline)
+                }
+            }
+        }
+        
+        // Create custom stop icon
+        val stopIcon = createStopIcon(context)
+        
+        // Add stops markers
+        stops.forEach { stop ->
+            val marker = map.addMarker(
+                MarkerOptions()
+                    .position(MapboxLatLng(stop.location.lat, stop.location.lng))
+                    .title(stop.name)
+                    .snippet("Stop Seq: ${stop.seq ?: 0}")
+                    .icon(stopIcon)
+            )
+            stopMarkers.add(marker)
+        }
     }
 
     Box(modifier = modifier.fillMaxSize()) {
@@ -96,38 +143,11 @@ fun MapScreen(
             },
             update = { mapView ->
                 val map = mapboxMapState ?: return@AndroidView
-                val context = mapView.context
                 
-                // Clear existing markers/polylines
-                map.clear()
+                // Remove previous bus markers only (never clear the map completely)
+                busMarkers.forEach { map.removeMarker(it) }
+                busMarkers.clear()
                 
-                // Draw route polylines
-                stops.forEach { stop ->
-                    stop.polyline?.let { points ->
-                        if (points.isNotEmpty()) {
-                            val lineOptions = PolylineOptions()
-                                .addAll(points.map { MapboxLatLng(it.lat, it.lng) })
-                                .color(Color.parseColor(route?.color ?: "#FF888888"))
-                                .width(4f)
-                            map.addPolyline(lineOptions)
-                        }
-                    }
-                }
-
-                // Create custom stop icon
-                val stopIcon = createStopIcon(context)
-
-                // Add stops markers
-                stops.forEach { stop ->
-                    map.addMarker(
-                        MarkerOptions()
-                            .position(MapboxLatLng(stop.location.lat, stop.location.lng))
-                            .title(stop.name)
-                            .snippet("Stop Seq: ${stop.seq ?: 0}")
-                            .icon(stopIcon)
-                    )
-                }
-
                 // Add active bus position markers
                 busPositions.forEach { bus ->
                     // Determine route direction (return trip vs outbound)
@@ -145,18 +165,19 @@ fun MapScreen(
                     val routeColorStr = route?.color ?: "#FFEC792D"
                     val busColorInt = getDirectionColor(routeColorStr, isReturnTrip)
 
-                    // Create dynamic bus icon with direction color and bearing
+                    // Create dynamic bus icon with direction color and bearing (triangle symbol without dot)
                     val busIcon = createBusIcon(context, busColorInt, bus.bearing)
 
                     val directionLabel = if (isReturnTrip) " (Return)" else " (Outbound)"
 
-                    map.addMarker(
+                    val marker = map.addMarker(
                         MarkerOptions()
                             .position(MapboxLatLng(bus.location.lat, bus.location.lng))
                             .title("Bus ${bus.plate_number}$directionLabel")
                             .snippet("Speed: ${bus.speed_kmh} km/h | Operator: ${bus.operator}")
                             .icon(busIcon)
                     )
+                    busMarkers.add(marker)
                 }
             },
             modifier = Modifier.fillMaxSize()
@@ -245,70 +266,36 @@ private fun createBusIcon(context: android.content.Context, colorInt: Int, beari
         isAntiAlias = true
     }
 
-    // Draw main circle shadow/border (white outline)
-    paint.color = Color.WHITE
-    canvas.drawCircle(size / 2f, size / 2f, size / 3.2f, paint)
+    val cx = size / 2f
+    val cy = size / 2f
 
-    // Draw main circle with bus color
-    paint.color = colorInt
-    canvas.drawCircle(size / 2f, size / 2f, size / 3.2f - 9f, paint)
-
-    // Draw inner bus indicator (e.g. small white dot or symbol)
-    paint.color = Color.WHITE
-    canvas.drawCircle(size / 2f, size / 2f, size / 8f, paint)
-
-    // If bearing is present, draw a directional pointer arrow
     if (bearing != null) {
-        val path = Path()
-        val radius = size / 3.2f
-        val cx = size / 2f
-        val cy = size / 2f
-        
-        // Convert bearing to radians and calculate coordinates
-        // 0 degrees is North in Mapbox, which is up (-Y in canvas)
-        val angleRad = Math.toRadians((bearing - 90).toDouble())
-        
-        // Tip of the arrow (outside the circle)
-        val tipX = cx + (radius + 18f) * Math.cos(angleRad).toFloat()
-        val tipY = cy + (radius + 18f) * Math.sin(angleRad).toFloat()
-        
-        // Base corners of the arrow triangle
-        val baseLeftAngle = angleRad + Math.toRadians(140.0)
-        val baseRightAngle = angleRad - Math.toRadians(140.0)
-        
-        val leftX = cx + (radius - 6f) * Math.cos(baseLeftAngle).toFloat()
-        val leftY = cy + (radius - 6f) * Math.sin(baseLeftAngle).toFloat()
-        
-        val rightX = cx + (radius - 6f) * Math.cos(baseRightAngle).toFloat()
-        val rightY = cy + (radius - 6f) * Math.sin(baseRightAngle).toFloat()
-        
-        path.moveTo(tipX, tipY)
-        path.lineTo(leftX, leftY)
-        path.lineTo(rightX, rightY)
-        path.close()
-        
-        // Draw white outline for arrow
-        paint.color = Color.WHITE
-        paint.style = Paint.Style.FILL_AND_STROKE
-        canvas.drawPath(path, paint)
-        
-        // Draw colored inner arrow
-        paint.color = colorInt
-        // Re-scale slightly smaller for outline effect
-        val innerTipX = cx + (radius + 12f) * Math.cos(angleRad).toFloat()
-        val innerTipY = cy + (radius + 12f) * Math.sin(angleRad).toFloat()
-        val innerLeftX = cx + (radius - 3f) * Math.cos(baseLeftAngle).toFloat()
-        val innerLeftY = cy + (radius - 3f) * Math.sin(baseLeftAngle).toFloat()
-        val innerRightX = cx + (radius - 3f) * Math.cos(baseRightAngle).toFloat()
-        val innerRightY = cy + (radius - 3f) * Math.sin(baseRightAngle).toFloat()
-        
-        val innerPath = Path().apply {
-            moveTo(innerTipX, innerTipY)
-            lineTo(innerLeftX, innerLeftY)
-            lineTo(innerRightX, innerRightY)
-            close()
-        }
-        canvas.drawPath(innerPath, paint)
+        canvas.save()
+        canvas.rotate(bearing.toFloat(), cx, cy)
+    }
+
+    // Centroid of this triangle is exactly at (cx, cy)
+    val path = Path().apply {
+        moveTo(cx, cy - 50f)
+        lineTo(cx - 38f, cy + 25f)
+        lineTo(cx + 38f, cy + 25f)
+        close()
+    }
+
+    // 1. Draw the white outline (stroke) first to ensure high visibility
+    paint.color = Color.WHITE
+    paint.style = Paint.Style.STROKE
+    paint.strokeWidth = 12f
+    paint.strokeJoin = Paint.Join.ROUND
+    canvas.drawPath(path, paint)
+
+    // 2. Draw the inner colored fill
+    paint.color = colorInt
+    paint.style = Paint.Style.FILL
+    canvas.drawPath(path, paint)
+
+    if (bearing != null) {
+        canvas.restore()
     }
 
     return IconFactory.getInstance(context).fromBitmap(bitmap)
