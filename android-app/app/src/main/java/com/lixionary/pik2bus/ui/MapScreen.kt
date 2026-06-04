@@ -81,7 +81,7 @@ fun MapScreen(
     
     val routePolylines = remember { mutableListOf<com.mapbox.mapboxsdk.annotations.Polyline>() }
     val stopMarkers = remember { mutableListOf<com.mapbox.mapboxsdk.annotations.Marker>() }
-    val busMarkers = remember { mutableListOf<com.mapbox.mapboxsdk.annotations.Marker>() }
+    val busMarkersMap = remember { mutableMapOf<String, com.mapbox.mapboxsdk.annotations.Marker>() }
 
     val coroutineScope = rememberCoroutineScope()
     val dataStoreManager = remember { DataStoreManager(context) }
@@ -242,6 +242,10 @@ fun MapScreen(
         stopMarkers.forEach { map.removeMarker(it) }
         stopMarkers.clear()
         
+        // Remove existing bus markers from previous route
+        busMarkersMap.values.forEach { map.removeMarker(it) }
+        busMarkersMap.clear()
+        
         // Draw route polylines in solid single color (Indigo #3F51B5)
         stops.forEach { stop ->
             stop.polyline?.let { points ->
@@ -309,21 +313,34 @@ fun MapScreen(
             update = { mapView ->
                 val map = mapboxMapState ?: return@AndroidView
                 
-                // Remove previous bus markers only (never clear the map completely)
-                busMarkers.forEach { map.removeMarker(it) }
-                busMarkers.clear()
+                // Get the current list of plate numbers in this update
+                val currentPlates = busPositions.map { it.plate_number }.toSet()
                 
-                // Add active bus position markers
+                // Remove markers for buses that are no longer active
+                val toRemove = busMarkersMap.keys.filter { it !in currentPlates }
+                toRemove.forEach { plate ->
+                    busMarkersMap[plate]?.let { map.removeMarker(it) }
+                    busMarkersMap.remove(plate)
+                }
+                
+                // Update or add active bus markers
                 busPositions.forEach { bus ->
                     // Determine route direction (return trip vs outbound)
-                    val stopIndex = stops.indexOfFirst { it.id == (bus.next_stop_id ?: bus.last_stop_id) }
-                    val isReturnTrip = if (stopIndex != -1 && stops.size > 1) {
-                        stopIndex >= stops.size / 2
-                    } else {
-                        // Fallback: check trip_headsign keywords for TransJakarta
+                    val isReturnTrip = if (bus.operator.equals("TRANSJAKARTA", ignoreCase = true)) {
+                        // For TransJakarta, trip_headsign is very reliable for direction
                         bus.trip_headsign?.contains("Blok M", ignoreCase = true) == true ||
                         bus.trip_headsign?.contains("Balai Kota", ignoreCase = true) == true ||
                         bus.trip_headsign?.contains("Kota", ignoreCase = true) == true
+                    } else {
+                        // For Agung Sedayu (or if TJ fallback), use stop indices
+                        val stopIndex = stops.indexOfFirst { it.id == (bus.next_stop_id ?: bus.last_stop_id) }
+                        if (stopIndex != -1 && stops.size > 1) {
+                            stopIndex >= stops.size / 2
+                        } else {
+                            bus.trip_headsign?.contains("Blok M", ignoreCase = true) == true ||
+                            bus.trip_headsign?.contains("Balai Kota", ignoreCase = true) == true ||
+                            bus.trip_headsign?.contains("Kota", ignoreCase = true) == true
+                        }
                     }
 
                     // Get color for direction
@@ -332,21 +349,37 @@ fun MapScreen(
 
                     // Create dynamic bus icon with direction color and bearing (triangle symbol without dot)
                     val busIcon = createBusIcon(context, busColorInt, bus.bearing)
-
                     val directionLabel = if (isReturnTrip) " (Return)" else " (Outbound)"
+                    val title = "Bus ${bus.plate_number}$directionLabel"
+                    val snippet = "Speed: ${bus.speed_kmh} km/h | Operator: ${bus.operator}"
+                    val position = MapboxLatLng(bus.location.lat, bus.location.lng)
 
-                    val marker = map.addMarker(
-                        MarkerOptions()
-                            .position(MapboxLatLng(bus.location.lat, bus.location.lng))
-                            .title("Bus ${bus.plate_number}$directionLabel")
-                            .snippet("Speed: ${bus.speed_kmh} km/h | Operator: ${bus.operator}")
-                            .icon(busIcon)
-                    )
-                    busMarkers.add(marker)
+                    val existingMarker = busMarkersMap[bus.plate_number]
+                    if (existingMarker != null) {
+                        // Update existing marker properties in place to prevent losing info callout windows
+                        existingMarker.position = position
+                        existingMarker.title = title
+                        existingMarker.snippet = snippet
+                        existingMarker.icon = busIcon
+                        map.updateMarker(existingMarker)
+                    } else {
+                        // Create and add new marker
+                        val marker = map.addMarker(
+                            MarkerOptions()
+                                .position(position)
+                                .title(title)
+                                .snippet(snippet)
+                                .icon(busIcon)
+                        )
+                        busMarkersMap[bus.plate_number] = marker
+                    }
 
                     // Restore selected info window if this bus was selected
                     if (bus.plate_number == selectedPlateNumber) {
-                        map.selectMarker(marker)
+                        val markerToSelect = busMarkersMap[bus.plate_number]
+                        if (markerToSelect != null) {
+                            map.selectMarker(markerToSelect)
+                        }
                     }
                 }
             },
@@ -370,13 +403,19 @@ fun MapScreen(
                     )
                     val distanceMeters = results[0]
 
-                    val stopIndex = stops.indexOfFirst { it.id == (bus.next_stop_id ?: bus.last_stop_id) }
-                    val isReturnTrip = if (stopIndex != -1 && stops.size > 1) {
-                        stopIndex >= stops.size / 2
-                    } else {
+                    val isReturnTrip = if (bus.operator.equals("TRANSJAKARTA", ignoreCase = true)) {
                         bus.trip_headsign?.contains("Blok M", ignoreCase = true) == true ||
                         bus.trip_headsign?.contains("Balai Kota", ignoreCase = true) == true ||
                         bus.trip_headsign?.contains("Kota", ignoreCase = true) == true
+                    } else {
+                        val stopIndex = stops.indexOfFirst { it.id == (bus.next_stop_id ?: bus.last_stop_id) }
+                        if (stopIndex != -1 && stops.size > 1) {
+                            stopIndex >= stops.size / 2
+                        } else {
+                            bus.trip_headsign?.contains("Blok M", ignoreCase = true) == true ||
+                            bus.trip_headsign?.contains("Balai Kota", ignoreCase = true) == true ||
+                            bus.trip_headsign?.contains("Kota", ignoreCase = true) == true
+                        }
                     }
                     val directionLabel = if (isReturnTrip) "Return" else "Outbound"
 
