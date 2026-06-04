@@ -22,7 +22,7 @@ T31_HUBS = [
 
 class TrackingManager:
     def __init__(self):
-        self.active_queues: Set[asyncio.Queue] = set()
+        self.active_queues: Dict[asyncio.Queue, Set[str]] = {} # queue -> set of route slugs
         self.tracked_buses: Set[str] = set()
         self.bus_positions: Dict[str, BusPosition] = {}  # vehicle_id -> BusPosition
         self.lock = asyncio.Lock()
@@ -40,11 +40,11 @@ class TrackingManager:
     async def register_client(self, buses: List[str]) -> asyncio.Queue:
         async with self.lock:
             queue = asyncio.Queue()
-            self.active_queues.add(queue)
+            buses_set = set(buses)
+            self.active_queues[queue] = buses_set
             
             # Update tracked buses list
-            for bus in buses:
-                self.tracked_buses.add(bus)
+            self.tracked_buses.update(buses_set)
                 
             logger.info(f"Registered new client. Active client count: {len(self.active_queues)}")
             
@@ -56,7 +56,8 @@ class TrackingManager:
 
     async def unregister_client(self, queue: asyncio.Queue, buses: List[str]):
         async with self.lock:
-            self.active_queues.remove(queue)
+            if queue in self.active_queues:
+                del self.active_queues[queue]
             logger.info(f"Unregistered client. Active client count: {len(self.active_queues)}")
             
             if len(self.active_queues) == 0:
@@ -65,9 +66,7 @@ class TrackingManager:
                 await self._stop_tracking()
             else:
                 # Recalculate which buses are still being tracked by remaining clients
-                # For simplicity, we keep everything in tracked_buses while there are clients,
-                # but we could also do client-specific tracking if needed.
-                pass
+                self.tracked_buses = set().union(*self.active_queues.values())
 
     async def _start_tracking(self):
         logger.info("Starting upstream connections...")
@@ -391,13 +390,11 @@ class TrackingManager:
                     logger.info(f"Removing stale bus: {k}")
                     del self.bus_positions[k]
                 
-                # Filter positions matching tracked buses
-                current_updates = [
-                    pos.model_dump()
-                    for pos in self.bus_positions.values()
-                    if pos.route_slug in self.tracked_buses
-                ]
-                
-                # Push to all queues
-                for q in self.active_queues:
-                    await q.put(current_updates)
+                # Push to all queues, filtering by what each queue requested
+                for q, requested_buses in list(self.active_queues.items()):
+                    client_updates = [
+                        pos.model_dump()
+                        for pos in self.bus_positions.values()
+                        if pos.route_slug in requested_buses
+                    ]
+                    await q.put(client_updates)

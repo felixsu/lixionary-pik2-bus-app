@@ -171,7 +171,8 @@ class MainActivity : ComponentActivity() {
                         val client = BusTrackerClient(backendUrl, apiKey)
                         client.trackBuses(listOf(activeTabSlug)).collectLatest { positions ->
                             Log.d(TAG, "SSE emitted ${positions.size} positions for active bus: $activeTabSlug")
-                            busPositions = positions
+                            val filteredPositions = positions.filter { it.route_slug == activeTabSlug }
+                            busPositions = filteredPositions
                         }
                     }
                 } else {
