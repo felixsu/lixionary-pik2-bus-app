@@ -185,6 +185,83 @@ class TrackingManager:
             logger.error(f"Failed to fetch TransJakarta guest token: {e}")
             raise e
 
+    async def ensure_tj_route_stops(self, route_slug: str):
+        """Ensure stops for a TransJakarta route are cached in the database.
+        If they don't exist, fetch them dynamically from the upstream API.
+        """
+        from app.db import get_route_by_slug, get_route_stops, save_stop, save_route_stop
+        
+        route = get_route_by_slug(route_slug)
+        if not route:
+            logger.warning(f"ensure_tj_route_stops: Route '{route_slug}' not found in database.")
+            return
+            
+        if route["operator"] != "TRANSJAKARTA":
+            return
+            
+        existing_stops = get_route_stops(route["id"])
+        if existing_stops:
+            return
+            
+        logger.info(f"ensure_tj_route_stops: Stops not cached for TransJakarta route '{route_slug}'. Fetching from API...")
+        try:
+            token = await self._get_tj_token()
+            headers = {
+                "Authorization": f"Bearer {token}",
+                "X-App-OS": "android",
+                "X-App-Version": "2.10.2",
+                "X-Device-ID": self.tj_device_id,
+                "User-Agent": "okhttp/4.12.0"
+            }
+            
+            def fetch_tj_route():
+                url = f"https://tijeapi.transjakarta.co.id/v1/route/{route_slug}"
+                return requests.get(url, headers=headers, timeout=15).json()
+                
+            tj_data = await asyncio.to_thread(fetch_tj_route)
+            
+            # Seed inbound stops
+            inbound_stops = tj_data.get("data", {}).get("inbound", {}).get("stops", [])
+            for seq, stop_raw in enumerate(inbound_stops, 1):
+                stop_data = {
+                    "id": stop_raw["stop_id"],
+                    "name": stop_raw["stop_name"],
+                    "lat": float(stop_raw["stop_lat"]),
+                    "lng": float(stop_raw["stop_lon"])
+                }
+                save_stop(stop_data)
+                polyline = [{"lat": stop_data["lat"], "lng": stop_data["lng"]}]
+                save_route_stop(
+                    route_id=route["id"],
+                    stop_id=stop_raw["stop_id"],
+                    seq=seq,
+                    polyline=polyline,
+                    schedule=[]
+                )
+                
+            # Seed outbound stops
+            outbound_stops = tj_data.get("data", {}).get("outbound", {}).get("stops", [])
+            offset = len(inbound_stops)
+            for seq, stop_raw in enumerate(outbound_stops, 1):
+                stop_data = {
+                    "id": stop_raw["stop_id"],
+                    "name": stop_raw["stop_name"],
+                    "lat": float(stop_raw["stop_lat"]),
+                    "lng": float(stop_raw["stop_lon"])
+                }
+                save_stop(stop_data)
+                polyline = [{"lat": stop_data["lat"], "lng": stop_data["lng"]}]
+                save_route_stop(
+                    route_id=route["id"],
+                    stop_id=stop_raw["stop_id"],
+                    seq=offset + seq,
+                    polyline=polyline,
+                    schedule=[]
+                )
+            logger.info(f"ensure_tj_route_stops: Successfully cached {offset + len(outbound_stops)} stops for route '{route_slug}'.")
+        except Exception as e:
+            logger.error(f"ensure_tj_route_stops: Failed to fetch/cache stops for TransJakarta route '{route_slug}': {e}")
+
     async def _poll_transjakarta_loop(self):
         headers = {
             "X-App-OS": "android",
@@ -194,23 +271,67 @@ class TrackingManager:
         }
         
         while True:
-            # Only poll if we are tracking T31 (or other TransJakarta routes)
-            # TJ routes are checked dynamically in the loop
-            has_tj_routes = any(r.upper().startswith("T31") or r == "1A" for r in self.tracked_buses)
-            if not has_tj_routes:
+            from app.db import get_route_by_slug, get_route_stops
+            
+            # 1. Identify active TJ routes being tracked
+            tj_tracked = []
+            for slug in list(self.tracked_buses):
+                route = get_route_by_slug(slug)
+                if route and route.get("operator") == "TRANSJAKARTA":
+                    tj_tracked.append(route)
+                    
+            if not tj_tracked:
                 await asyncio.sleep(5)
                 continue
                 
             try:
+                # 2. Extract dynamic polling hubs from stops of the active routes
+                hubs = []
+                for route in tj_tracked:
+                    # Make sure stops are cached
+                    await self.ensure_tj_route_stops(route["slug"])
+                    
+                    # Fetch stops from DB
+                    stops = get_route_stops(route["id"])
+                    if not stops:
+                        continue
+                        
+                    # Sample 3-4 stops evenly
+                    L = len(stops)
+                    sampled_stops = []
+                    if L <= 4:
+                        sampled_stops = stops
+                    else:
+                        sampled_stops = [
+                            stops[0],
+                            stops[L // 3],
+                            stops[2 * L // 3],
+                            stops[L - 1]
+                        ]
+                        
+                    for s in sampled_stops:
+                        loc = s.get("location")
+                        if loc:
+                            hubs.append((round(loc["lat"], 4), round(loc["lng"], 4)))
+                            
+                # Deduplicate hubs
+                unique_hubs = list(set(hubs))
+                
+                if not unique_hubs:
+                    await asyncio.sleep(5)
+                    continue
+                    
+                # 3. Poll /v1/bus around each unique dynamic hub
                 token = await self._get_tj_token()
                 headers["Authorization"] = f"Bearer {token}"
                 
-                # Fetch positions around our key hubs along the T31 corridor
-                for hub in T31_HUBS:
+                logger.info(f"Polling TJ API around {len(unique_hubs)} dynamic hubs for tracked routes {[r['slug'] for r in tj_tracked]}")
+                
+                for lat, lng in unique_hubs:
                     url = "https://tijeapi.transjakarta.co.id/v1/bus"
                     params = {
-                        "latitude": hub["lat"],
-                        "longitude": hub["lng"],
+                        "latitude": lat,
+                        "longitude": lng,
                         "radius": 5000  # 5 km radius
                     }
                     
@@ -223,7 +344,7 @@ class TrackingManager:
                     if r.status_code == 401:
                         logger.warning("TJ Token expired, clearing cache...")
                         self.tj_token = None
-                        break  # Break hub loop to refresh token next iteration
+                        break
                         
                     r.raise_for_status()
                     data = r.json()
@@ -231,21 +352,20 @@ class TrackingManager:
                     buses = data.get("data") or []
                     async with self.lock:
                         for bus_raw in buses:
-                            # Strip large stop arrays to optimize memory
                             bus_raw.pop('stops', None)
                             pos = normalize_tj_bus(bus_raw)
-                            # Only keep it if it matches the tracked buses
+                            # Only keep if the route is tracked
                             if pos.route_slug in self.tracked_buses:
                                 self.bus_positions[pos.vehicle_id] = pos
                                 
-                    # Add brief spacing between hub requests to be polite to the API
+                    # Spacing between API calls to be polite
                     await asyncio.sleep(1)
                     
             except Exception as e:
                 logger.error(f"Error in TransJakarta polling loop: {e}")
                 
-            # Poll every 10 seconds
-            await asyncio.sleep(10)
+            # Poll every 15 seconds
+            await asyncio.sleep(15)
 
     async def _publish_loop(self):
         """Periodically broadcast the current tracked bus positions to SSE clients."""

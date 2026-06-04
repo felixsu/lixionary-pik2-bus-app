@@ -113,7 +113,7 @@ async def sync_catalogs():
     except Exception as e:
         logger.error(f"Error syncing Agung Sedayu routes: {e}")
 
-    # 2. Sync TransJakarta Routes (T31 and 1A)
+    # 2. Sync TransJakarta Routes (All Catalog)
     try:
         token = await tracking_manager._get_tj_token()
         headers = {
@@ -124,82 +124,61 @@ async def sync_catalogs():
             "User-Agent": "okhttp/4.12.0"
         }
         
-        for tj_route_id in ["T31", "1A"]:
-            try:
-                logger.info(f"Syncing TransJakarta {tj_route_id} metadata...")
-                def fetch_tj_route(rid):
-                    url = f"https://tijeapi.transjakarta.co.id/v1/route/{rid}"
-                    return requests.get(url, headers=headers, timeout=15).json()
-                    
-                tj_data = await asyncio.to_thread(fetch_tj_route, tj_route_id)
-                route_info = tj_data.get("data", {}).get("route", {})
-                if route_info:
-                    # Seed TJ route
-                    route_color = '#' + route_info.get("route_color", "ffff6d")[-6:]
-                    initial_lat = -6.14 if tj_route_id == "T31" else -6.11
-                    initial_lng = 106.75 if tj_route_id == "T31" else 106.78
-                    
-                    tj_route = {
-                        "id": tj_route_id,
-                        "slug": tj_route_id,
-                        "code": tj_route_id,
-                        "name": route_info.get("route_long_name", f"TransJakarta {tj_route_id}"),
-                        "type": "BRT",
-                        "operator": "TRANSJAKARTA",
-                        "is_active": True,
-                        "color": route_color,
-                        "initial_lat": initial_lat,
-                        "initial_lng": initial_lng,
-                        "initial_zoom": 12
-                    }
-                    save_route(tj_route)
-                    
-                    # Seed stops from both Inbound and Outbound
-                    # Inbound
-                    inbound_stops = tj_data.get("data", {}).get("inbound", {}).get("stops", [])
-                    for seq, stop_raw in enumerate(inbound_stops, 1):
-                        stop_data = {
-                            "id": stop_raw["stop_id"],
-                            "name": stop_raw["stop_name"],
-                            "lat": float(stop_raw["stop_lat"]),
-                            "lng": float(stop_raw["stop_lon"])
-                        }
-                        save_stop(stop_data)
-                        
-                        polyline = [{"lat": stop_data["lat"], "lng": stop_data["lng"]}]
-                        save_route_stop(
-                            route_id=tj_route_id,
-                            stop_id=stop_raw["stop_id"],
-                            seq=seq,
-                            polyline=polyline,
-                            schedule=[]
-                        )
-                        
-                    # Outbound (append after inbound or count offset)
-                    outbound_stops = tj_data.get("data", {}).get("outbound", {}).get("stops", [])
-                    offset = len(inbound_stops)
-                    for seq, stop_raw in enumerate(outbound_stops, 1):
-                        stop_data = {
-                            "id": stop_raw["stop_id"],
-                            "name": stop_raw["stop_name"],
-                            "lat": float(stop_raw["stop_lat"]),
-                            "lng": float(stop_raw["stop_lon"])
-                        }
-                        save_stop(stop_data)
-                        
-                        polyline = [{"lat": stop_data["lat"], "lng": stop_data["lng"]}]
-                        save_route_stop(
-                            route_id=tj_route_id,
-                            stop_id=stop_raw["stop_id"],
-                            seq=offset + seq,
-                            polyline=polyline,
-                            schedule=[]
-                        )
-                    logger.info(f"TransJakarta {tj_route_id} catalog synced successfully.")
-            except Exception as e:
-                logger.error(f"Error syncing TransJakarta {tj_route_id}: {e}")
+        logger.info("Syncing complete TransJakarta route catalog...")
+        def fetch_tj_routes():
+            url = "https://tijeapi.transjakarta.co.id/v1/route?offset=0&limit=1000"
+            return requests.get(url, headers=headers, timeout=15).json()
+            
+        tj_data = await asyncio.to_thread(fetch_tj_routes)
+        routes_list = tj_data.get("data", [])
+        logger.info(f"Retrieved {len(routes_list)} TransJakarta routes from upstream API.")
+        
+        for route_raw in routes_list:
+            rid = route_raw["route_id"]
+            slug = route_raw["route_short_name"]
+            code = route_raw["route_short_name"]
+            name = route_raw["route_long_name"]
+            
+            # Determine route type from route_desc
+            desc = (route_raw.get("route_desc") or "").lower()
+            if "royal" in desc:
+                route_type = "Royaltrans"
+            elif "rusun" in desc:
+                route_type = "Rusun"
+            elif "jak" in desc or "integrasi" in desc:
+                route_type = "JAK.LINK"
+            else:
+                route_type = "BRT"
+                
+            color = "#" + (route_raw.get("route_color") or "888888").replace("#", "")[-6:]
+            
+            # Use custom centering for PIK-focused routes, otherwise default to Central Jakarta
+            initial_lat = -6.18
+            initial_lng = 106.82
+            if slug == "T31":
+                initial_lat = -6.14
+                initial_lng = 106.75
+            elif slug == "1A":
+                initial_lat = -6.11
+                initial_lng = 106.78
+                
+            tj_route = {
+                "id": rid,
+                "slug": slug,
+                "code": code,
+                "name": name,
+                "type": route_type,
+                "operator": "TRANSJAKARTA",
+                "is_active": True,
+                "color": color,
+                "initial_lat": initial_lat,
+                "initial_lng": initial_lng,
+                "initial_zoom": 12
+            }
+            save_route(tj_route)
+        logger.info("TransJakarta route catalog seeding completed successfully.")
     except Exception as e:
-        logger.error(f"Failed to initialize TransJakarta token for catalog sync: {e}")
+        logger.error(f"Failed to sync TransJakarta route catalog: {e}")
 
 @app.get("/health")
 def health():
@@ -235,11 +214,15 @@ def get_routes():
         raise HTTPException(status_code=500, detail="Database retrieval failed")
 
 @app.get("/routes/{slug}/stops")
-def get_stops(slug: str = Path(..., description="The route slug (e.g. ASG2, T31)")) -> list:
+async def get_stops(slug: str = Path(..., description="The route slug (e.g. ASG2, T31)")) -> list:
     """Retrieve stops and shapes for a specific route."""
     route = get_route_by_slug(slug)
     if not route:
         raise HTTPException(status_code=404, detail=f"Route '{slug}' not found")
+        
+    # Lazy-load stops for TransJakarta route if needed
+    if route.get("operator") == "TRANSJAKARTA":
+        await tracking_manager.ensure_tj_route_stops(slug)
         
     try:
         return get_route_stops(route["id"])
