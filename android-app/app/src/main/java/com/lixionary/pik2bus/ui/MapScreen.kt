@@ -1,13 +1,23 @@
 package com.lixionary.pik2bus.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.location.Location
+import android.location.LocationListener
+import android.location.LocationManager
+import android.os.Bundle
+import android.util.Log
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -16,6 +26,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.lixionary.pik2bus.data.BusPosition
+import com.lixionary.pik2bus.data.DataStoreManager
 import com.lixionary.pik2bus.data.Route
 import com.lixionary.pik2bus.data.Stop
 import com.mapbox.mapboxsdk.Mapbox
@@ -27,6 +38,7 @@ import com.mapbox.mapboxsdk.geometry.LatLng as MapboxLatLng
 import com.mapbox.mapboxsdk.maps.MapView
 import com.mapbox.mapboxsdk.maps.MapboxMap
 import com.mapbox.mapboxsdk.maps.Style
+import kotlinx.coroutines.launch
 
 // Custom inline OSM raster style to remain completely free and self-contained
 private val OSM_STYLE_JSON = """
@@ -60,6 +72,7 @@ fun MapScreen(
     route: Route?,
     stops: List<Stop>,
     busPositions: List<BusPosition>,
+    isLocationPermissionGranted: Boolean,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -68,6 +81,116 @@ fun MapScreen(
     val routePolylines = remember { mutableListOf<com.mapbox.mapboxsdk.annotations.Polyline>() }
     val stopMarkers = remember { mutableListOf<com.mapbox.mapboxsdk.annotations.Marker>() }
     val busMarkers = remember { mutableListOf<com.mapbox.mapboxsdk.annotations.Marker>() }
+
+    val coroutineScope = rememberCoroutineScope()
+    val dataStoreManager = remember { DataStoreManager(context) }
+    val locationManager = remember { context.getSystemService(android.content.Context.LOCATION_SERVICE) as LocationManager }
+
+    var initialCameraCenter by remember { mutableStateOf<MapboxLatLng?>(null) }
+    var initialCameraSet by remember { mutableStateOf(false) }
+    var hasCenteredOnNewLocation by remember { mutableStateOf(false) }
+
+    // Load initial user location from DataStore on startup (with Jakarta default fallback)
+    LaunchedEffect(Unit) {
+        dataStoreManager.lastUserLocationFlow.collect { pair ->
+            if (initialCameraCenter == null) {
+                if (pair != null) {
+                    initialCameraCenter = MapboxLatLng(pair.first, pair.second)
+                    Log.d("MapScreen", "Loaded last user location from DataStore: $pair")
+                } else {
+                    initialCameraCenter = MapboxLatLng(-6.2088, 106.8456) // Jakarta default
+                    Log.d("MapScreen", "No stored user location, defaulting to Jakarta center")
+                }
+            }
+        }
+    }
+
+    // Set camera to initial user location once loaded
+    LaunchedEffect(initialCameraCenter, mapboxMapState) {
+        val map = mapboxMapState ?: return@LaunchedEffect
+        val center = initialCameraCenter ?: return@LaunchedEffect
+        if (!initialCameraSet) {
+            map.moveCamera(CameraUpdateFactory.newLatLngZoom(center, 12.0))
+            initialCameraSet = true
+            Log.d("MapScreen", "Centered initial map camera to: ${center.latitude}, ${center.longitude}")
+        }
+    }
+
+    // Handle location listener to update DataStore and auto-center once
+    DisposableEffect(isLocationPermissionGranted, mapboxMapState) {
+        val map = mapboxMapState
+        if (!isLocationPermissionGranted || map == null) return@DisposableEffect onDispose {}
+        
+        val listener = object : LocationListener {
+            override fun onLocationChanged(location: Location) {
+                Log.d("MapScreen", "Location updated: ${location.latitude}, ${location.longitude}")
+                // Save coordinates to DataStore
+                coroutineScope.launch {
+                    dataStoreManager.saveLastUserLocation(location.latitude, location.longitude)
+                }
+                // Zoom automatically to user location once when first coordinates are received
+                if (!hasCenteredOnNewLocation) {
+                    map.animateCamera(
+                        CameraUpdateFactory.newLatLngZoom(
+                            MapboxLatLng(location.latitude, location.longitude),
+                            14.0
+                        )
+                    )
+                    hasCenteredOnNewLocation = true
+                    Log.d("MapScreen", "Auto-centered camera on new live user location")
+                }
+            }
+            override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) {}
+            override fun onProviderEnabled(provider: String) {}
+            override fun onProviderDisabled(provider: String) {}
+        }
+        
+        try {
+            val provider = if (locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)) {
+                LocationManager.GPS_PROVIDER
+            } else {
+                LocationManager.NETWORK_PROVIDER
+            }
+            
+            // Get last known location to set initial center if nothing is stored
+            val lastKnown = locationManager.getLastKnownLocation(provider)
+            if (lastKnown != null && initialCameraCenter == null) {
+                initialCameraCenter = MapboxLatLng(lastKnown.latitude, lastKnown.longitude)
+            }
+            
+            locationManager.requestLocationUpdates(provider, 5000L, 5f, listener)
+            Log.d("MapScreen", "Registered location updates listener with provider: $provider")
+        } catch (e: SecurityException) {
+            Log.e("MapScreen", "SecurityException requesting location updates", e)
+        }
+        
+        onDispose {
+            locationManager.removeUpdates(listener)
+            Log.d("MapScreen", "Removed location updates listener")
+        }
+    }
+
+    // Enable Mapbox LocationComponent (draws user blue dot on the map)
+    LaunchedEffect(mapboxMapState, isLocationPermissionGranted) {
+        val map = mapboxMapState ?: return@LaunchedEffect
+        if (isLocationPermissionGranted) {
+            map.getStyle { style ->
+                try {
+                    val locationComponent = map.locationComponent
+                    locationComponent.activateLocationComponent(
+                        com.mapbox.mapboxsdk.location.LocationComponentActivationOptions
+                            .builder(context, style)
+                            .useDefaultLocationEngine(true)
+                            .build()
+                    )
+                    locationComponent.isLocationComponentEnabled = true
+                    Log.d("MapScreen", "Mapbox LocationComponent activated successfully")
+                } catch (e: Exception) {
+                    Log.e("MapScreen", "Error activating LocationComponent", e)
+                }
+            }
+        }
+    }
 
     // Nearest bus calculation
     val approachingBus = remember(busPositions) {
@@ -115,6 +238,17 @@ fun MapScreen(
             )
             stopMarkers.add(marker)
         }
+
+        // Adjust camera to route's initial center once the route catalog/stops load
+        route?.initial_map_center?.let { center ->
+            map.animateCamera(
+                CameraUpdateFactory.newLatLngZoom(
+                    MapboxLatLng(center.lat, center.lng),
+                    (route.initial_zoom ?: 12).toDouble()
+                )
+            )
+            Log.d("MapScreen", "Animated camera to route's center: ${center.lat}, ${center.lng}")
+        }
     }
 
     Box(modifier = modifier.fillMaxSize()) {
@@ -125,18 +259,17 @@ fun MapScreen(
                     onCreate(null)
                     getMapAsync { mapboxMap ->
                         mapboxMapState = mapboxMap
+
+                        // Set strict boundaries for Greater Jakarta
+                        val jakartaBounds = com.mapbox.mapboxsdk.geometry.LatLngBounds.Builder()
+                            .include(MapboxLatLng(-5.90, 106.60)) // NE limit
+                            .include(MapboxLatLng(-6.45, 107.10)) // SW limit
+                            .build()
+                        mapboxMap.setLatLngBoundsForCameraTarget(jakartaBounds)
+                        mapboxMap.setMinZoomPreference(10.0)
+
                         mapboxMap.setStyle(Style.Builder().fromJson(OSM_STYLE_JSON)) {
                             // Style loaded
-                        }
-                        
-                        // Center camera if route coordinates are specified
-                        route?.initial_map_center?.let { center ->
-                            mapboxMap.moveCamera(
-                                CameraUpdateFactory.newLatLngZoom(
-                                    MapboxLatLng(center.lat, center.lng),
-                                    (route.initial_zoom ?: 12).toDouble()
-                                )
-                            )
                         }
                     }
                 }
@@ -182,6 +315,36 @@ fun MapScreen(
             },
             modifier = Modifier.fillMaxSize()
         )
+
+        // Floating action button for GPS center-on-my-location
+        if (isLocationPermissionGranted && mapboxMapState != null) {
+            FloatingActionButton(
+                onClick = {
+                    val map = mapboxMapState ?: return@FloatingActionButton
+                    val loc = map.locationComponent.lastKnownLocation
+                    if (loc != null) {
+                        map.animateCamera(
+                            CameraUpdateFactory.newLatLngZoom(
+                                MapboxLatLng(loc.latitude, loc.longitude),
+                                14.0
+                            )
+                        )
+                    } else {
+                        Toast.makeText(context, "Waiting for GPS signal...", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 16.dp, bottom = if (approachingBus != null) 140.dp else 16.dp), // Position above approaching bus card if visible
+                containerColor = MaterialTheme.colorScheme.primaryContainer,
+                contentColor = MaterialTheme.colorScheme.onPrimaryContainer
+            ) {
+                Icon(
+                    imageVector = Icons.Default.LocationOn,
+                    contentDescription = "My Location"
+                )
+            }
+        }
 
         // Overlay card showing info of closest approaching bus
         approachingBus?.let { bus ->

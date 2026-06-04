@@ -18,7 +18,28 @@ class DataStoreManager(private val context: Context) {
     companion object {
         private val SELECTED_BUSES_KEY = stringPreferencesKey("selected_buses")
         private val BACKEND_URL_KEY = stringPreferencesKey("backend_url")
+        private val LAST_USER_LAT_KEY = stringPreferencesKey("last_user_lat")
+        private val LAST_USER_LNG_KEY = stringPreferencesKey("last_user_lng")
         const val DEFAULT_BACKEND_URL = "http://10.0.2.2:8000/" // Android emulator host local loopback
+    }
+
+    val lastUserLocationFlow: Flow<Pair<Double, Double>?> = context.dataStore.data.map { preferences ->
+        val latStr = preferences[LAST_USER_LAT_KEY]
+        val lngStr = preferences[LAST_USER_LNG_KEY]
+        if (latStr != null && lngStr != null) {
+            val lat = latStr.toDoubleOrNull()
+            val lng = lngStr.toDoubleOrNull()
+            if (lat != null && lng != null) {
+                Pair(lat, lng)
+            } else null
+        } else null
+    }
+
+    suspend fun saveLastUserLocation(lat: Double, lng: Double) {
+        context.dataStore.edit { preferences ->
+            preferences[LAST_USER_LAT_KEY] = lat.toString()
+            preferences[LAST_USER_LNG_KEY] = lng.toString()
+        }
     }
 
     val selectedBusesFlow: Flow<List<String>> = context.dataStore.data.map { preferences ->
