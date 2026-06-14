@@ -11,3 +11,5 @@ __pycache__/
 **/.idea/workspace.xml
 **/.idea/caches/
 **/.idea/studiobot.xml
+
+.DS_Store
