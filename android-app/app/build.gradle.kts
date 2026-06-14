@@ -1,3 +1,6 @@
+import java.util.Properties
+import java.io.FileInputStream
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -20,9 +23,28 @@ android {
         }
     }
 
+    signingConfigs {
+        create("release") {
+            val localProperties = Properties().apply {
+                val file = rootProject.file("local.properties")
+                if (file.exists()) {
+                    FileInputStream(file).use { load(it) }
+                }
+            }
+            val path = localProperties.getProperty("keystore.path") ?: System.getenv("KEYSTORE_PATH")
+            if (path != null) {
+                storeFile = file(path)
+                storePassword = localProperties.getProperty("keystore.password") ?: System.getenv("KEYSTORE_PASSWORD")
+                keyAlias = localProperties.getProperty("key.alias") ?: System.getenv("KEY_ALIAS")
+                keyPassword = localProperties.getProperty("key.password") ?: System.getenv("KEY_PASSWORD")
+            }
+        }
+    }
+
     buildTypes {
         release {
             isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
